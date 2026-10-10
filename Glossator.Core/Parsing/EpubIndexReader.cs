@@ -1,4 +1,4 @@
-﻿using AngleSharp.Html.Parser;
+using AngleSharp.Html.Parser;
 using Glossator.Core.Models.Epub;
 using Glossator.Core.Models.Glossary;
 
@@ -8,9 +8,23 @@ public static class EpubIndexReader
 {
     private static readonly HtmlParser Parser = new();
 
+    private static readonly HashSet<string> ExcludedGenericTerms = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "data", "dataset", "datasets", "model", "models", "cost", "costs", "training",
+        "scope", "performance", "practitioner", "practitioners", "scientist", "scientists",
+        "engineer", "engineers", "tool", "tools", "design", "architecture", "architectures",
+        "challenges", "solutions", "trust", "validation", "evaluation", "development",
+        "algorithms", "algorithm", "audits", "audit", "value", "updates",
+        "learning", "interaction", "communication", "aggregation", "operations", "operation",
+        "principles", "system", "systems", "types", "memory", "testing", "risks", "risk",
+        "compliance", "consistency", "coherence", "coordination", "privacy", "security",
+        "benefits", "example", "examples", "swarms", "swarm", "video", "voice", "speech",
+        "text", "graphs", "chains", "interfaces", "governance", "adoption", "alignment"
+    };
+
     /// <summary>
     /// EPUB dizin (index) dosyasından YALNIZCA en üst seviyedeki (kök) ana teknik kavramları çeker.
-    /// Alt dallardaki arama notlarını (örn: - repairing, - building in agentic systems) eler.
+    /// Genel sözlük kelimelerini eler, yalnızca gerçek teknik kavramları alır.
     /// </summary>
     public static List<GlossaryEntry> Read(EpubPackage package)
     {
@@ -32,19 +46,18 @@ public static class EpubIndexReader
             var rawTerm = termSpan.TextContent.Trim();
             if (string.IsNullOrWhiteSpace(rawTerm) || rawTerm.Length < 2) continue;
             // 1. VİRGÜL KURALI: Virgülün solundaki gerçek teknik kavramı al!
-            // Örn: "generative UIs, graphical agent interfaces" -> "generative UIs"
-            // Örn: "entity recognition and extraction, building..." -> "entity recognition and extraction"
             if (rawTerm.Contains(','))
             {
                 rawTerm = rawTerm.Split(',')[0].Trim();
             }
             var normalized = rawTerm.ToLowerInvariant();
+            if (ExcludedGenericTerms.Contains(normalized)) continue;
             if (seenKeys.Add(normalized))
             {
                 entries.Add(new GlossaryEntry
                 {
                     EnglishTerm = rawTerm,
-                    Policy = GlossingPolicy.ProgressiveGloss
+                    Policy = GlossingPolicy.AlwaysTurkish
                 });
             }
         }

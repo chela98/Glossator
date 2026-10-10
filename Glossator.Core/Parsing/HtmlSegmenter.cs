@@ -1,6 +1,6 @@
-﻿using System.Text.RegularExpressions;
 using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
+using Glossator.Core.Packaging;
 
 namespace Glossator.Core.Parsing;
 
@@ -11,7 +11,7 @@ public static class HtmlSegmenter
     // Çevrilecek metin içeren blok elementler
     private static readonly HashSet<string> TranslatableTags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "p", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "blockquote", "dt", "dd"
+        "p", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "caption", "th", "td", "blockquote", "dt", "dd", "li"
     };
 
     /// <summary>
@@ -42,23 +42,26 @@ public static class HtmlSegmenter
                 continue;
             }
 
-            // Metin bloğu ise (<p>, <h1> vb.) ve içinde başka alt blok (<p>, <div>) barındırmıyorsa
-            if (TranslatableTags.Contains(tagName) && !element.QuerySelectorAll("p, div").Any())
+            // Metin bloğu ise (<p>, <h1>, <th> vb.) ve içinde başka kapsayıcı blok (<p>, <div>, <pre>, <table> vb.) barındırmıyorsa
+            if (TranslatableTags.Contains(tagName) && !element.QuerySelectorAll("p, div, pre, table, ul, ol").Any())
             {
                 var innerHtml = element.InnerHtml.Trim();
                 if (string.IsNullOrWhiteSpace(innerHtml)) continue;
 
-                // Maskeleme işlemi: <code> ve index etiketlerini güvene al
-                var (maskedText, placeholders) = MaskInlineTags(innerHtml);
+                // AST Maskeleme işlemi: <code>, <kbd>, <math>, <svg> ve index etiketlerini TreeWalker ile güvene al
+                var (maskedText, tokens) = DomTreeWalkerMasker.Instance.MaskElement(element);
 
                 if (!string.IsNullOrWhiteSpace(maskedText))
                 {
+                    var placeholders = tokens.ToDictionary(t => t.Token, t => t.OriginalMarkup);
+
                     segments.Add(new HtmlSegment
                     {
                         Index = segmentIndex++,
                         TagName = tagName,
                         OriginalInnerHtml = innerHtml,
                         MaskedText = maskedText,
+                        Tokens = tokens,
                         Placeholders = placeholders,
                         DomElement = element
                     });
@@ -85,31 +88,12 @@ public static class HtmlSegmenter
     }
 
     /// <summary>
-    /// Paragraf içindeki <code>, <kbd>, ve O'Reilly dizin çapalarını ([[CODE_0]], [[INDEX_0]]) maskeler.
+    /// AngleSharp DOM belgesini Google Play Books, Apple Books ve W3C EPUB standartlarına uygun
+    /// katı XML/XHTML olarak serialize eder.
     /// </summary>
-    private static (string MaskedText, Dictionary<string, string> Placeholders) MaskInlineTags(string innerHtml)
+    public static string ToXhtml(this IDocument document)
     {
-        var placeholders = new Dictionary<string, string>();
-        var tokenCounter = 0;
-        var html = innerHtml;
-
-        // 1. <a data-type="indexterm"...> etiketlerini maskele (O'Reilly dizin çapaları bozulmasın)
-        html = Regex.Replace(html, @"<a[^>]+data-type=""indexterm""[^>]*>.*?</a>|<a[^>]+data-type=""indexterm""[^>]*/>|<a[^>]+data-type=""indexterm""[^>]*>", m =>
-        {
-            var token = $"[[INDEX_{tokenCounter++}]]";
-            placeholders[token] = m.Value;
-            return token;
-        }, RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-        // 2. <code>...</code> ve <kbd>...</kbd> etiketlerini maskele (Kodlar çevrilmesin)
-        html = Regex.Replace(html, @"<(code|kbd)[^>]*>.*?</\1>", m =>
-        {
-            var token = $"[[CODE_{tokenCounter++}]]";
-            placeholders[token] = m.Value;
-            return token;
-        }, RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-        return (html, placeholders);
+        return document.ToStrictXhtml();
     }
 
     private static bool IsInsidePre(IElement element)

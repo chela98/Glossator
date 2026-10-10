@@ -2,4 +2,5 @@
   <Project Path="Glossator.AI/Glossator.AI.csproj" />
   <Project Path="Glossator.Cli/Glossator.Cli.csproj" />
   <Project Path="Glossator.Core/Glossator.Core.csproj" />
+  <Project Path="Glossator.Tests/Glossator.Tests.csproj" />
 </Solution>

@@ -1,70 +1,64 @@
-﻿using Glossator.Core.Models.Glossary;
-using System;
-using System.Collections.Generic;
-using System.Text;
+namespace Glossator.Core.Rules;
 
-namespace Glossator.Core.Rules
+using System.Collections.Concurrent;
+using Glossator.Core.Models.Glossary;
+
+public enum TermFormatDecision
 {
-    public enum TermFormatDecision
+    Hybrid,      // 1 ve 2. kullanım: Türkçe (İngilizce)
+    PureTurkish, // 3 ve sonrası: Yalnızca Türkçe
+    EnglishOnly  // Sektör jargonu: AlwaysEnglish
+}
+
+/// <summary>
+/// Çeviride terimlerin o ünitede (Chapter veya Part) kaç kez geçtiğini sayan ve her yeni üniteye geçildiğinde sayaçları sıfırlayan thread-safe kural motoru.
+/// </summary>
+public sealed class TermUsageTracker(string initialScopeId = "default")
+{
+    private readonly ConcurrentDictionary<string, int> _counts = new(StringComparer.OrdinalIgnoreCase);
+
+    public string CurrentScopeId { get; private set; } = initialScopeId;
+
+    /// <summary>
+    /// Yeni bir bölüme geçildiğinde çağrılır. Bölüm içi sayaçları sıfırlar.
+    /// </summary>
+    public void BeginNewScope(string newScopeId)
     {
-        Hybrid,      // 1 ve 2. kullanım: pipeline (boru hattı) veya ekli hali
-        EnglishOnly, // 3 ve sonrası: pipeline
-        TurkishOnly  // Doğrudan Türkçe
+        CurrentScopeId = newScopeId;
+        _counts.Clear();
     }
 
     /// <summary>
-    /// Çeviride terimlerin o ünitede (Chapter veya Part) kaç kez geçtiğini sayan ve her yeni üniteye geçildiğinde sayaçları sıfırlayan deterministik kural motoru.
+    /// Terim metin içinde her geçtiğinde çağrılır; sayacı atomik artırır ve 
+    /// kurala göre nasıl basılacağına (Hybrid mi PureTurkish mi) karar verir.
     /// </summary>
-    public class TermUsageTracker
+    public TermFormatDecision RecordUsage(GlossaryEntry term)
     {
-        // Terim -> O ünitedeki kullanım sayısı
-        private readonly Dictionary<string, int> _counts = new(StringComparer.OrdinalIgnoreCase);
-        /// <summary>
-        /// Şu an işlenen ünite/bölüm kimliği (örn: "ch01.html")
-        /// </summary>
-        public string CurrentScopeId { get; private set; }
-        public TermUsageTracker(string initialScopeId = "default")
+        if (term.Policy == GlossingPolicy.AlwaysEnglish)
         {
-            CurrentScopeId = initialScopeId;
+            return TermFormatDecision.EnglishOnly;
         }
-        /// <summary>
-        /// Yeni bir bölüme geçildiğinde çağrılır. Tüm sayaçları sıfırlar!
-        /// </summary>
-        public void BeginNewScope(string newScopeId)
+
+        if (term.Policy == GlossingPolicy.AlwaysTurkish)
         {
-            CurrentScopeId = newScopeId;
-            _counts.Clear(); // Yeni bölüm için sayaç sıfırlanır!
+            return TermFormatDecision.PureTurkish;
         }
-        /// <summary>
-        /// Terim metin içinde her geçtiğinde çağrılır; sayacı 1 artırır ve 
-        /// kurala göre nasıl basılacağına (Hybrid mi EnglishOnly mi) karar verir.
-        /// </summary>
-        public TermFormatDecision RecordUsage(GlossaryEntry term)
-        {
-            // 1. Zaten bildiğin sektör jargonuysa sayaçtan bağımsız her zaman İngilizce
-            if (term.Policy == GlossingPolicy.AlwaysEnglish)
-            {
-                return TermFormatDecision.EnglishOnly;
-            }
-            // 2. Düz kavramsa her zaman Türkçe
-            if (term.Policy == GlossingPolicy.AlwaysTurkish)
-            {
-                return TermFormatDecision.TurkishOnly;
-            }
-            // 3. Aşamalı (Progressive) Öğrenme Kuralı:
-            var key = term.NormalizedKey;
-            _counts.TryGetValue(key, out var currentCount);
-            currentCount++;
-            _counts[key] = currentCount;
-            // 1 ve 2. geçişte HİBRİT, 3 ve sonrasında SAF İNGİLİZCE
-            return currentCount <= 2
-                ? TermFormatDecision.Hybrid
-                : TermFormatDecision.EnglishOnly;
-        }
-        /// <summary>
-        /// Bir terimin o ünitede şu ana kadar kaç kez geçtiğini sorgular.
-        /// </summary>
-        public int GetCurrentCount(string englishTerm) =>
-            _counts.TryGetValue(englishTerm.Trim().ToLowerInvariant(), out var count) ? count : 0;
+
+        // Aşamalı (Progressive) Öğrenme Kuralı:
+        var currentCount = _counts.AddOrUpdate(
+            term.NormalizedKey,
+            1,
+            static (_, count) => count + 1);
+
+        // 1 ve 2. geçişte HİBRİT "Türkçe (İngilizce)", 3 ve sonrasında SAF TÜRKÇE
+        return currentCount <= 2
+            ? TermFormatDecision.Hybrid
+            : TermFormatDecision.PureTurkish;
     }
+
+    /// <summary>
+    /// Bir terimin o ünitede şu ana kadar kaç kez geçtiğini sorgular.
+    /// </summary>
+    public int GetCurrentCount(string englishTerm) =>
+        _counts.TryGetValue(englishTerm.Trim().ToLowerInvariant(), out var count) ? count : 0;
 }

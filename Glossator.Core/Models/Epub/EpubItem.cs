@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -19,7 +19,16 @@ namespace Glossator.Core.Models.Epub
             Href.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
             Href.EndsWith(".xhtml", StringComparison.OrdinalIgnoreCase);
 
-        public override string ToString() => $"{Id} -> {Href} ({MediaType})";
-        
+        /// <summary>
+        /// Belgenin semantik rolü.
+        /// </summary>
+        public EpubDocumentRole Role { get; set; } = EpubDocumentRole.NonDocument;
+
+        /// <summary>
+        /// Belgenin tespit edilen veya TOC'tan okunan dostane başlığı.
+        /// </summary>
+        public string? Title { get; set; }
+
+        public override string ToString() => $"{Id} -> {Href} ({Role}, {MediaType})";
     }
 }

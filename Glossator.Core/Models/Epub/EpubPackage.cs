@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -6,10 +6,32 @@ namespace Glossator.Core.Models.Epub
 {
     public class EpubPackage
     {
-        public string Title { get; init; }
+        public string Title { get; init; } = string.Empty;
         public string Language { get; init; } = "en";
         public string? Author { get; init; }
         public string OpfDirectory { get; init; } = string.Empty;
+
+        /// <summary>
+        /// EPUB paketinin kök dizini (META-INF ve mimetype barındıran üst dizin).
+        /// </summary>
+        public string RootDirectory
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(OpfDirectory)) return string.Empty;
+
+                // 1. OpfDirectory içinde META-INF var mı?
+                if (Directory.Exists(Path.Combine(OpfDirectory, "META-INF")))
+                    return OpfDirectory;
+
+                // 2. OpfDirectory'nin üst klasöründe META-INF var mı?
+                var parent = Directory.GetParent(OpfDirectory)?.FullName;
+                if (!string.IsNullOrEmpty(parent) && Directory.Exists(Path.Combine(parent, "META-INF")))
+                    return parent;
+
+                return OpfDirectory;
+            }
+        }
 
         ///<summary>
         /// Eğer paket doğrudan bir .epub dosyasından açıldıysa orjinal dosya yolu.
@@ -26,7 +48,19 @@ namespace Glossator.Core.Models.Epub
         ///</summary>
         public List<EpubItem> Spine { get; init; } = [];
 
-        ///<summary>
+        /// <summary>
+        /// Kitabın ana okuma gövdesini oluşturan bölümleri
+        /// </summary>
+        public List<EpubItem> Chapters =>
+            Spine.Where(item => item.Role == EpubDocumentRole.Chapter).ToList();
+
+        /// <summary>
+        /// Önsöz, sözlük, yazar biyografisi vb. destekleyici ek sayfalar
+        /// </summary>
+        public List<EpubItem> AuxiliaryItems =>
+            Spine.Where(item => item.Role == EpubDocumentRole.Auxiliary).ToList();
+
+        /// <summary>
         /// Kitapta bir sözlük dosyası varsa otomatik tespiti
         /// </summary>
         public EpubItem? GlossaryItem =>
@@ -34,13 +68,20 @@ namespace Glossator.Core.Models.Epub
                 item.Id.Contains("glossary", StringComparison.OrdinalIgnoreCase) ||
                 item.Href.Contains("glossary", StringComparison.OrdinalIgnoreCase));
 
-        ///<summary>
+        /// <summary>
         /// Kitapta bir dizin dosyası varsa otomatik tespit eder 
         /// </summary>
         public EpubItem? IndexItem =>
             Spine.FirstOrDefault(item =>
+                item.Role == EpubDocumentRole.Index ||
                 item.Id.Contains("index", StringComparison.OrdinalIgnoreCase) ||
                 item.Href.Contains("index", StringComparison.OrdinalIgnoreCase) ||
                 item.Href.StartsWith("ix", StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>
+        /// İçindekiler (TOC / Navigasyon) belgesi
+        /// </summary>
+        public EpubItem? NavigationItem =>
+            Manifest.Values.FirstOrDefault(item => item.Role == EpubDocumentRole.Navigation);
     }
 }

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Agents.AI" Version="1.24.0" />
@@ -9,6 +9,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Glossator.Core\Glossator.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Prompts\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
   <PropertyGroup>

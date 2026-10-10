@@ -1,44 +1,28 @@
-﻿using Microsoft.Data.Sqlite;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.Data.Sqlite;
+using Glossator.Core.Data;
+using Glossator.Core.Models.Checkpoint;
 using Glossator.Core.Models.Glossary;
 
 namespace Glossator.Core.Glossary;
 
 public class SqliteGlossaryRepository
 {
+    private readonly ISqliteConnectionFactory _connectionFactory;
     private readonly string _connectionString;
 
+    public SqliteGlossaryRepository(ISqliteConnectionFactory connectionFactory)
+    {
+        _connectionFactory = connectionFactory;
+        _connectionString = connectionFactory.ConnectionString;
+    }
+
     public SqliteGlossaryRepository(string dbPath = "glossator.db")
+        : this(new SqliteConnectionFactory(dbPath))
     {
-        _connectionString = $"Data Source={dbPath}";
-        InitializeDatabase();
     }
 
-    /// <summary>
-    /// Tablo yoksa otomatik oluşturur.
-    /// </summary>
-    private void InitializeDatabase()
-    {
-        using var connection = new SqliteConnection(_connectionString);
-        connection.Open();
-
-        var createTableSql = """
-            CREATE TABLE IF NOT EXISTS Terms (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                EnglishTerm TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                TurkishTerm TEXT,
-                EnglishDefinition TEXT,
-                Policy INTEGER NOT NULL DEFAULT 0,
-                IsReviewed INTEGER NOT NULL DEFAULT 0,
-                SourceBook TEXT,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_terms_english ON Terms(EnglishTerm);
-            """;
-
-        using var command = new SqliteCommand(createTableSql, connection);
-        command.ExecuteNonQuery();
-    }
 
     /// <summary>
     /// Kitaptan çıkarılan terimleri veritabanına ekler. 
@@ -46,8 +30,7 @@ public class SqliteGlossaryRepository
     /// </summary>
     public int ImportTerms(IEnumerable<GlossaryEntry> terms, string sourceBook)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        connection.Open();
+        using var connection = _connectionFactory.CreateOpenConnection();
         using var transaction = connection.BeginTransaction();
 
         var now = DateTime.UtcNow.ToString("o");
@@ -80,12 +63,193 @@ public class SqliteGlossaryRepository
     }
 
     /// <summary>
+    /// Sektör standardı temel yapay zeka ve yazılım terimlerinin Türkçe karşılıklarını ve politikalarını veritabanına işler.
+    /// Kullanıcı tarafından elle düzenlenmiş (IsReviewed=1) terimleri ASLA ezmez.
+    /// </summary>
+    public void SeedDefaultTurkishTranslations()
+    {
+        var coreTerms = new List<(string English, string Turkish, GlossingPolicy Policy)>
+        {
+            // 1. AlwaysTurkish: Düz kavramlar ve doğrudan Türkçeleştirilecek teknik terimler
+            ("ML practitioner", "makine öğrenimi uygulayıcısı", GlossingPolicy.AlwaysTurkish),
+            ("ML practitioners", "makine öğrenimi uygulayıcıları", GlossingPolicy.AlwaysTurkish),
+            ("data scientist", "veri bilimci", GlossingPolicy.AlwaysTurkish),
+            ("data scientists", "veri bilimciler", GlossingPolicy.AlwaysTurkish),
+            ("machine learning", "makine öğrenimi", GlossingPolicy.AlwaysTurkish),
+            ("generative model", "üretken model", GlossingPolicy.AlwaysTurkish),
+            ("generative models", "üretken modeller", GlossingPolicy.AlwaysTurkish),
+            ("pretrained", "önceden eğitilmiş", GlossingPolicy.AlwaysTurkish),
+            ("pretraining", "ön eğitim", GlossingPolicy.AlwaysTurkish),
+            ("dataset", "veri seti", GlossingPolicy.AlwaysTurkish),
+            ("datasets", "veri setleri", GlossingPolicy.AlwaysTurkish),
+            ("data", "veri", GlossingPolicy.AlwaysTurkish),
+            ("cost", "maliyet", GlossingPolicy.AlwaysTurkish),
+            ("costs", "maliyetler", GlossingPolicy.AlwaysTurkish),
+            ("model", "model", GlossingPolicy.AlwaysTurkish),
+            ("models", "modeller", GlossingPolicy.AlwaysTurkish),
+            ("training", "eğitim", GlossingPolicy.AlwaysTurkish),
+            ("tool", "araç", GlossingPolicy.AlwaysTurkish),
+            ("tools", "araçlar", GlossingPolicy.AlwaysTurkish),
+            ("tool use", "araç kullanımı", GlossingPolicy.AlwaysTurkish),
+            ("human oversight", "insan denetimi", GlossingPolicy.AlwaysTurkish),
+            ("oversight", "denetim", GlossingPolicy.AlwaysTurkish),
+            ("pipeline", "boru hattı", GlossingPolicy.AlwaysTurkish),
+            ("pipelines", "boru hatları", GlossingPolicy.AlwaysTurkish),
+            ("workflow", "iş akışı", GlossingPolicy.AlwaysTurkish),
+            ("workflows", "iş akışları", GlossingPolicy.AlwaysTurkish),
+            ("prompt", "istem", GlossingPolicy.AlwaysTurkish),
+            ("prompts", "istemler", GlossingPolicy.AlwaysTurkish),
+            ("embedding", "gömme", GlossingPolicy.AlwaysTurkish),
+            ("embeddings", "gömmeler", GlossingPolicy.AlwaysTurkish),
+            ("context window", "bağlam penceresi", GlossingPolicy.AlwaysTurkish),
+            ("guardrails", "güvenlik korkulukları", GlossingPolicy.AlwaysTurkish),
+            ("reasoning", "akıl yürütme", GlossingPolicy.AlwaysTurkish),
+            ("decision making", "karar alma", GlossingPolicy.AlwaysTurkish),
+            ("agent", "ajan", GlossingPolicy.AlwaysTurkish),
+            ("agents", "ajanlar", GlossingPolicy.AlwaysTurkish),
+            ("large language models", "büyük dil modelleri", GlossingPolicy.AlwaysTurkish),
+            ("large language model", "büyük dil modeli", GlossingPolicy.AlwaysTurkish),
+            ("activation function", "aktivasyon fonksiyonu", GlossingPolicy.AlwaysTurkish),
+            ("backpropagation", "geri yayılım", GlossingPolicy.AlwaysTurkish),
+            ("gradient descent", "gradyan inişi", GlossingPolicy.AlwaysTurkish),
+            ("loss function", "kayıp fonksiyonu", GlossingPolicy.AlwaysTurkish),
+            ("transformer", "dönüştürücü", GlossingPolicy.AlwaysTurkish),
+
+            // 2. AlwaysEnglish: Markalar, kütüphaneler, protokoller ve sektör kısaltmaları
+            ("Microsoft Agent Framework", "Microsoft Agent Framework", GlossingPolicy.AlwaysEnglish),
+            ("Microsoft.Extensions.AI", "Microsoft.Extensions.AI", GlossingPolicy.AlwaysEnglish),
+            ("Model Context Protocol", "Model Context Protocol", GlossingPolicy.AlwaysEnglish),
+            ("Agent-to-Agent Protocol", "Agent-to-Agent Protocol", GlossingPolicy.AlwaysEnglish),
+            ("LangChain", "LangChain", GlossingPolicy.AlwaysEnglish),
+            ("CrewAI", "CrewAI", GlossingPolicy.AlwaysEnglish),
+            ("AutoGen", "AutoGen", GlossingPolicy.AlwaysEnglish),
+            ("Semantic Kernel", "Semantic Kernel", GlossingPolicy.AlwaysEnglish),
+            ("DSPy", "DSPy", GlossingPolicy.AlwaysEnglish),
+            ("Ollama", "Ollama", GlossingPolicy.AlwaysEnglish),
+            ("vLLM", "vLLM", GlossingPolicy.AlwaysEnglish),
+            ("LLM", "LLM", GlossingPolicy.AlwaysEnglish),
+            ("LLMs", "LLMs", GlossingPolicy.AlwaysEnglish),
+            ("API", "API", GlossingPolicy.AlwaysEnglish),
+            ("SDK", "SDK", GlossingPolicy.AlwaysEnglish),
+            ("RAG", "RAG", GlossingPolicy.AlwaysEnglish),
+            ("REST", "REST", GlossingPolicy.AlwaysEnglish),
+            ("JSON", "JSON", GlossingPolicy.AlwaysEnglish),
+            ("YAML", "YAML", GlossingPolicy.AlwaysEnglish),
+
+            // 3. ProgressiveGloss: Temel Ajan/Yapay Zeka Kavramları (İlk 2 geçişte hibrit Türkçe (İngilizce), sonra Türkçe)
+            ("autonomous agent", "otonom ajan", GlossingPolicy.ProgressiveGloss),
+            ("autonomous agents", "otonom ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("agency", "eylemlilik", GlossingPolicy.ProgressiveGloss),
+            ("agentic system", "ajan tabanlı sistem", GlossingPolicy.ProgressiveGloss),
+            ("agentic systems", "ajan tabanlı sistemler", GlossingPolicy.ProgressiveGloss),
+            ("foundation model", "temel model", GlossingPolicy.ProgressiveGloss),
+            ("foundation models", "temel modeller", GlossingPolicy.ProgressiveGloss),
+            ("reinforcement learning", "pekiştirmeli öğrenme", GlossingPolicy.ProgressiveGloss),
+            ("fine-tuning", "ince ayar", GlossingPolicy.ProgressiveGloss),
+            ("few-shot learning", "az örnekli öğrenme", GlossingPolicy.ProgressiveGloss),
+            ("zero-shot learning", "sıfır örnekli öğrenme", GlossingPolicy.ProgressiveGloss),
+            ("vector database", "vektör veritabanı", GlossingPolicy.ProgressiveGloss),
+            ("vector databases", "vektör veritabanları", GlossingPolicy.ProgressiveGloss),
+            ("knowledge graph", "bilgi grafiği", GlossingPolicy.ProgressiveGloss),
+            ("knowledge graphs", "bilgi grafikleri", GlossingPolicy.ProgressiveGloss),
+            ("prompt engineering", "istem mühendisliği", GlossingPolicy.ProgressiveGloss),
+
+            // 4. Ajan Türleri ve Sınıflandırmalar (Types of Agents)
+            ("business-task agents", "iş görevi ajanları", GlossingPolicy.ProgressiveGloss),
+            ("business-task agent", "iş görevi ajanı", GlossingPolicy.ProgressiveGloss),
+            ("conversational agents", "konuşma ajanları", GlossingPolicy.ProgressiveGloss),
+            ("conversational agent", "konuşma ajanı", GlossingPolicy.ProgressiveGloss),
+            ("research agents", "araştırma ajanları", GlossingPolicy.ProgressiveGloss),
+            ("research agent", "araştırma ajanı", GlossingPolicy.ProgressiveGloss),
+            ("analytics agents", "analitik ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("analytics agent", "analitik ajan", GlossingPolicy.ProgressiveGloss),
+            ("developer agents", "geliştirici ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("developer agent", "geliştirici ajan", GlossingPolicy.ProgressiveGloss),
+            ("domain-specific agents", "alana özgü ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("domain-specific agent", "alana özgü ajan", GlossingPolicy.ProgressiveGloss),
+            ("browser-using agents", "tarayıcı kullanan ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("browser-using agent", "tarayıcı kullanan ajan", GlossingPolicy.ProgressiveGloss),
+            ("voice agents", "sesli ajanlar", GlossingPolicy.ProgressiveGloss),
+            ("voice agent", "sesli ajan", GlossingPolicy.ProgressiveGloss),
+            ("video agents", "video ajanları", GlossingPolicy.ProgressiveGloss),
+            ("video agent", "video ajanı", GlossingPolicy.ProgressiveGloss),
+            ("coding agents", "kodlama ajanları", GlossingPolicy.ProgressiveGloss),
+            ("coding agent", "kodlama ajanı", GlossingPolicy.ProgressiveGloss),
+
+            // 5. Pratik Kullanım Senaryosu Ajanları (Practical Use Cases)
+            ("customer support agent", "müşteri destek ajanı", GlossingPolicy.ProgressiveGloss),
+            ("financial services agent", "finansal hizmetler ajanı", GlossingPolicy.ProgressiveGloss),
+            ("healthcare patient intake and triage agent", "sağlık hasta kabul ve triyaj ajanı", GlossingPolicy.ProgressiveGloss),
+            ("IT help desk agent", "BT yardım masası ajanı", GlossingPolicy.ProgressiveGloss),
+            ("legal document review agent", "hukuki belge inceleme ajanı", GlossingPolicy.ProgressiveGloss),
+            ("security operations center (SOC) analyst agent", "güvenlik operasyonları merkezi (SOC) analist ajanı", GlossingPolicy.ProgressiveGloss),
+            ("supply chain and logistics agent", "tedarik zinciri ve lojistik ajanı", GlossingPolicy.ProgressiveGloss),
+
+            // 6. İleri Düzey Model Teknikleri & Mimariler (Distillation, Quantization, Synthesis)
+            ("distillation", "damıtma", GlossingPolicy.ProgressiveGloss),
+            ("model distillation", "model damıtma", GlossingPolicy.ProgressiveGloss),
+            ("quantization", "nicemleme", GlossingPolicy.ProgressiveGloss),
+            ("synthetic data", "sentetik veri", GlossingPolicy.ProgressiveGloss),
+            ("synthetic data generation", "sentetik veri üretimi", GlossingPolicy.ProgressiveGloss),
+            ("open-weight models", "açık ağırlıklı modeller", GlossingPolicy.ProgressiveGloss),
+            ("open-weight model", "açık ağırlıklı model", GlossingPolicy.ProgressiveGloss),
+            ("conversational turn-taking", "konuşmada sıra alma", GlossingPolicy.ProgressiveGloss),
+            ("context-aware interaction", "bağlam duyarlı etkileşim", GlossingPolicy.ProgressiveGloss),
+            ("context-aware", "bağlam duyarlı", GlossingPolicy.ProgressiveGloss),
+            ("natural language understanding", "doğal dil anlama", GlossingPolicy.ProgressiveGloss),
+            ("structured content generation", "yapılandırılmış içerik üretimi", GlossingPolicy.ProgressiveGloss),
+            ("contextual interpretation and decision making", "bağlamsal yorumlama ve karar alma", GlossingPolicy.ProgressiveGloss),
+            ("adaptive planning", "uyarlanabilir planlama", GlossingPolicy.ProgressiveGloss),
+            ("information summarization", "bilgi özetleme", GlossingPolicy.ProgressiveGloss),
+            ("unstructured data", "yapılandırılmamış veri", GlossingPolicy.ProgressiveGloss),
+            ("code generation", "kod üretimi", GlossingPolicy.ProgressiveGloss),
+            ("routine task automation", "rutin görev otomasyonu", GlossingPolicy.ProgressiveGloss),
+            ("multimodal information synthesis", "çok modlu bilgi sentezi", GlossingPolicy.ProgressiveGloss),
+            ("robotic process automation", "robotik süreç otomasyonu", GlossingPolicy.ProgressiveGloss),
+
+            // 7. Mimari İlkeler & Karşılaştırma Başlıkları
+            ("scalability", "ölçeklenebilirlik", GlossingPolicy.ProgressiveGloss),
+            ("modularity", "modülerlik", GlossingPolicy.ProgressiveGloss),
+            ("continuous learning", "sürekli öğrenme", GlossingPolicy.ProgressiveGloss),
+            ("resilience", "dayanıklılık", GlossingPolicy.ProgressiveGloss),
+            ("future-proofing", "geleceğe uyumluluk", GlossingPolicy.ProgressiveGloss),
+            ("strengths", "güçlü yönler", GlossingPolicy.ProgressiveGloss),
+            ("trade-offs", "ödünleşimler", GlossingPolicy.ProgressiveGloss),
+            ("best for", "en uygun senaryolar", GlossingPolicy.ProgressiveGloss)
+        };
+
+        using var connection = _connectionFactory.CreateOpenConnection();
+        using var transaction = connection.BeginTransaction();
+
+        var now = DateTime.UtcNow.ToString("o");
+        var insertSql = """
+            INSERT INTO Terms (EnglishTerm, TurkishTerm, Policy, IsReviewed, CreatedAt, UpdatedAt)
+            VALUES (@EnglishTerm, @TurkishTerm, @Policy, 0, @Now, @Now)
+            ON CONFLICT(EnglishTerm) DO UPDATE SET
+                TurkishTerm = excluded.TurkishTerm,
+                Policy = excluded.Policy
+            WHERE Terms.IsReviewed = 0;
+            """;
+
+        foreach (var (en, tr, policy) in coreTerms)
+        {
+            using var cmd = new SqliteCommand(insertSql, connection, transaction);
+            cmd.Parameters.AddWithValue("@EnglishTerm", en);
+            cmd.Parameters.AddWithValue("@TurkishTerm", tr);
+            cmd.Parameters.AddWithValue("@Policy", (int)policy);
+            cmd.Parameters.AddWithValue("@Now", now);
+            cmd.ExecuteNonQuery();
+        }
+
+        transaction.Commit();
+    }
+
+    /// <summary>
     /// Henüz senin onayından geçmemiş (IsReviewed=0) terimleri getirir.
     /// </summary>
     public List<GlossaryEntry> GetUnreviewedTerms()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        connection.Open();
+        using var connection = _connectionFactory.CreateOpenConnection();
 
         var query = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms WHERE IsReviewed = 0 ORDER BY EnglishTerm;";
         using var command = new SqliteCommand(query, connection);
@@ -113,8 +277,7 @@ public class SqliteGlossaryRepository
     /// </summary>
     public void UpdateTermReview(int id, GlossingPolicy policy, string? turkishTerm = null)
     {
-        using var connection = new SqliteConnection(_connectionString);
-        connection.Open();
+        using var connection = _connectionFactory.CreateOpenConnection();
 
         var updateSql = """
             UPDATE Terms 
@@ -139,8 +302,7 @@ public class SqliteGlossaryRepository
     /// </summary>
     public List<GlossaryEntry> GetAllTerms()
     {
-        using var connection = new SqliteConnection(_connectionString);
-        connection.Open();
+        using var connection = _connectionFactory.CreateOpenConnection();
 
         var query = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms ORDER BY EnglishTerm;";
         using var command = new SqliteCommand(query, connection);
@@ -161,5 +323,160 @@ public class SqliteGlossaryRepository
             });
         }
         return list;
+    }
+
+    /// <summary>
+    /// Çeviri sırasında kullanılacak TÜM onaylı veya güncel terimleri asenkron çeker.
+    /// </summary>
+    public async Task<List<GlossaryEntry>> GetAllTermsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var query = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms ORDER BY EnglishTerm;";
+        await using var command = new SqliteCommand(query, connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        var list = new List<GlossaryEntry>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            list.Add(new GlossaryEntry
+            {
+                Id = reader.GetInt32(0),
+                EnglishTerm = reader.GetString(1),
+                TurkishTerm = reader.IsDBNull(2) ? null : reader.GetString(2),
+                EnglishDefinition = reader.IsDBNull(3) ? null : reader.GetString(3),
+                Policy = (GlossingPolicy)reader.GetInt32(4),
+                IsReviewed = reader.GetInt32(5) == 1,
+                SourceBook = reader.IsDBNull(6) ? null : reader.GetString(6)
+            });
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Metnin SHA-256 özetini (hash) hesaplar. Kaynak metin değiştiğinde tespiti sağlar.
+    /// </summary>
+    public static string ComputeHash(string text)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(bytes);
+    }
+
+    /// <summary>
+    /// Belirli bir bölüm ve segment için daha önce kaydedilmiş checkpoint'i döner.
+    /// </summary>
+    public async Task<SegmentCheckpoint?> GetCheckpointAsync(string chapterFile, int segmentIndex, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var sql = """
+            SELECT ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt
+            FROM SegmentCheckpoints
+            WHERE ChapterFile = @ChapterFile AND SegmentIndex = @SegmentIndex;
+            """;
+
+        await using var command = new SqliteCommand(sql, connection);
+        command.Parameters.AddWithValue("@ChapterFile", chapterFile);
+        command.Parameters.AddWithValue("@SegmentIndex", segmentIndex);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (await reader.ReadAsync(cancellationToken))
+        {
+            return new SegmentCheckpoint
+            {
+                ChapterFile = reader.GetString(0),
+                SegmentIndex = reader.GetInt32(1),
+                OriginalHash = reader.GetString(2),
+                TagName = reader.GetString(3),
+                OriginalText = reader.GetString(4),
+                TranslatedText = reader.GetString(5),
+                StageStatus = reader.GetString(6),
+                UpdatedAt = DateTime.Parse(reader.GetString(7))
+            };
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Bölümde tamamlanmış tüm segment checkpoint'lerini sözlük olarak döner (Hızlı O(1) arama için).
+    /// </summary>
+    public async Task<Dictionary<int, SegmentCheckpoint>> GetCompletedCheckpointsAsync(string chapterFile, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var sql = """
+            SELECT ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt
+            FROM SegmentCheckpoints
+            WHERE ChapterFile = @ChapterFile AND StageStatus = 'Completed';
+            """;
+
+        await using var command = new SqliteCommand(sql, connection);
+        command.Parameters.AddWithValue("@ChapterFile", chapterFile);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new Dictionary<int, SegmentCheckpoint>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var cp = new SegmentCheckpoint
+            {
+                ChapterFile = reader.GetString(0),
+                SegmentIndex = reader.GetInt32(1),
+                OriginalHash = reader.GetString(2),
+                TagName = reader.GetString(3),
+                OriginalText = reader.GetString(4),
+                TranslatedText = reader.GetString(5),
+                StageStatus = reader.GetString(6),
+                UpdatedAt = DateTime.Parse(reader.GetString(7))
+            };
+            result[cp.SegmentIndex] = cp;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Segment çevirisini atomik olarak SQLite veritabanına kaydeder veya günceller.
+    /// </summary>
+    public async Task SaveCheckpointAsync(SegmentCheckpoint checkpoint, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var sql = """
+            INSERT INTO SegmentCheckpoints (ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt)
+            VALUES (@ChapterFile, @SegmentIndex, @OriginalHash, @TagName, @OriginalText, @TranslatedText, @StageStatus, @UpdatedAt)
+            ON CONFLICT(ChapterFile, SegmentIndex) DO UPDATE SET
+                OriginalHash = excluded.OriginalHash,
+                TagName = excluded.TagName,
+                OriginalText = excluded.OriginalText,
+                TranslatedText = excluded.TranslatedText,
+                StageStatus = excluded.StageStatus,
+                UpdatedAt = excluded.UpdatedAt;
+            """;
+
+        await using var command = new SqliteCommand(sql, connection);
+        command.Parameters.AddWithValue("@ChapterFile", checkpoint.ChapterFile);
+        command.Parameters.AddWithValue("@SegmentIndex", checkpoint.SegmentIndex);
+        command.Parameters.AddWithValue("@OriginalHash", checkpoint.OriginalHash);
+        command.Parameters.AddWithValue("@TagName", checkpoint.TagName);
+        command.Parameters.AddWithValue("@OriginalText", checkpoint.OriginalText);
+        command.Parameters.AddWithValue("@TranslatedText", checkpoint.TranslatedText);
+        command.Parameters.AddWithValue("@StageStatus", checkpoint.StageStatus);
+        command.Parameters.AddWithValue("@UpdatedAt", checkpoint.UpdatedAt.ToString("o"));
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bir bölümün checkpoint önbelleğini temizler (--fresh komutunda kullanılır).
+    /// </summary>
+    public async Task ClearCheckpointsAsync(string chapterFile, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+
+        var sql = "DELETE FROM SegmentCheckpoints WHERE ChapterFile = @ChapterFile;";
+        await using var command = new SqliteCommand(sql, connection);
+        command.Parameters.AddWithValue("@ChapterFile", chapterFile);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

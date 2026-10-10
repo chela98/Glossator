@@ -1,6 +1,7 @@
-﻿using System.IO.Compression;
+using System.IO.Compression;
 using System.Xml.Linq;
 using Glossator.Core.Models.Epub;
+using Glossator.Core.Security;
 
 namespace Glossator.Core.Parsing;
 
@@ -89,7 +90,7 @@ public static class EpubManifestReader
             }
         }
 
-        return new EpubPackage
+        var package = new EpubPackage
         {
             Title = title,
             Language = language,
@@ -99,6 +100,11 @@ public static class EpubManifestReader
             Manifest = manifest,
             Spine = spine
         };
+
+        // Semantik rolleri ve başlıkları otomatik sınıflandır
+        EpubDocumentClassifier.ClassifyPackage(package);
+
+        return package;
     }
 
     /// <summary>
@@ -116,7 +122,7 @@ public static class EpubManifestReader
         }
 
         Directory.CreateDirectory(tempDir);
-        ZipFile.ExtractToDirectory(epubFilePath, tempDir, overwriteFiles: true);
+        SafeZipExtractor.ExtractSafely(epubFilePath, tempDir);
 
         return tempDir;
     }

@@ -1,20 +1,21 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace Glossator.AI.Configuration;
 
-namespace Glossator.AI.Configuration
+public class AiProviderOptions
 {
-    public class AiProviderOptions
-    {
-        public string Endpoint { get; set; } = string.Empty;
-        public string ApiKey { get; set; } = string.Empty;
-        public string ModelId { get; set; } = string.Empty;
-    }
-    public class GlossatorAiOptions
-    {
-        public AiProviderOptions Gemini { get; set; } = new();
-        public AiProviderOptions EvrenSyzz { get; set; } = new();
-    }
-
-
+    public string Endpoint { get; set; } = string.Empty;
+    public string ApiKey { get; set; } = string.Empty;
 }
+
+public class AgentRoleOptions
+{
+    public string Provider { get; set; } = string.Empty;
+    public string ModelId { get; set; } = string.Empty;
+    public string? ReasoningEffort { get; set; }
+}
+
+public class GlossatorAiOptions
+{
+    public Dictionary<string, AiProviderOptions> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, AgentRoleOptions> Agents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+

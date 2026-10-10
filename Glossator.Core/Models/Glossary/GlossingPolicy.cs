@@ -1,23 +1,22 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace Glossator.Core.Models.Glossary;
 
-namespace Glossator.Core.Models.Glossary
+public enum GlossingPolicy
 {
-    public enum GlossingPolicy
-    {
-        /// <summary>
-        /// İlk 2 geçişte hibrit (ingilizce + türkçe),3 ve sonrasında saf ingilizce
-        /// </summary>
-        ProgressiveGloss,
-        /// <summary>
-        /// Sektör jargonu: Asla Türkçeleştirilmeyenler  
-        /// </summary>
-        AlwaysEnglish,
-        /// <summary>
-        /// Düz kavramlar: Doğrudan Türkçesi kullanılır (Data privacy -> Veri gizliliği vb.).
-        /// </summary>
-        AlwaysTurkish
+    /// <summary>
+    /// Pedagojik Aşamalı Tanıtım: Ünite (Chapter) bazında ilk 2 geçişte hibrit "Türkçe (İngilizce)",
+    /// 3. ve sonraki kullanımlarda ise YALNIZCA akıcı TÜRKÇE karşılığı kullanılır.
+    /// </summary>
+    ProgressiveGloss = 0,
 
-    }
+    /// <summary>
+    /// Dokunulmaz Sektör Jargonu: Markalar, SDK'ler, protokoller ve kısaltmalar (LLM, API, REST).
+    /// Asla Türkçeleştirilmez, parantez açılmaz; orijinal İngilizce kalır.
+    /// </summary>
+    AlwaysEnglish = 1,
+
+    /// <summary>
+    /// Düz Teknik Kavramlar: Doğrudan yerleşik Türkçe karşılığı kullanılır (pipeline -> boru hattı).
+    /// Asla İngilizce parantez eklenmez.
+    /// </summary>
+    AlwaysTurkish = 2
 }
