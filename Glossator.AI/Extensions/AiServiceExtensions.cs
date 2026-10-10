@@ -16,6 +16,17 @@ public static class AiServiceExtensions
 
     public static IServiceCollection AddGlossatorAiClients(this IServiceCollection services)
     {
+        // 0. Central TokenBucketRateLimiter Singleton (60 RPM / TPM)
+        services.AddSingleton<System.Threading.RateLimiting.RateLimiter>(_ =>
+            new System.Threading.RateLimiting.TokenBucketRateLimiter(new System.Threading.RateLimiting.TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 60,
+                TokensPerPeriod = 60,
+                ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+                QueueLimit = 100,
+                QueueProcessingOrder = System.Threading.RateLimiting.QueueProcessingOrder.OldestFirst
+            }));
+
         // 1. StyleAnalyst Keyed Service
         RegisterAgentChatClient(services, KeyStyleAnalyst);
 
@@ -70,6 +81,19 @@ public static class AiServiceExtensions
                     chatOptions.AdditionalProperties["reasoning_effort"] = agentConfig.ReasoningEffort;
                     return next(messages, chatOptions, ct);
                 });
+            }
+
+            // Transport Seviyesinde 429 / 503 Jittered Exponential Backoff
+            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<Glossator.AI.Clients.ResilienceChatClient>>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Glossator.AI.Clients.ResilienceChatClient>.Instance;
+
+            builder.Use(c => new Glossator.AI.Clients.ResilienceChatClient(c, logger));
+
+            // Merkezi RateLimiter ara yazılımı
+            var rateLimiter = sp.GetService<System.Threading.RateLimiting.RateLimiter>();
+            if (rateLimiter != null)
+            {
+                builder.Use(c => new Glossator.AI.RateLimiting.RateLimitingChatClient(c, rateLimiter));
             }
 
             return builder

@@ -28,6 +28,19 @@ public sealed class GlossarySerializationService : IGlossarySerializationService
         SerializationFormat format,
         CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        // Eğer hedef bir klasörse veya klasör ayracı ile bitiyorsa, dosya adını otomatik tamamla
+        var defaultFileName = format == SerializationFormat.Yaml ? "glossary.yaml" : "glossary.json";
+        if (Directory.Exists(filePath) || filePath.EndsWith(Path.DirectorySeparatorChar) || filePath.EndsWith(Path.AltDirectorySeparatorChar))
+        {
+            filePath = Path.Combine(filePath, defaultFileName);
+        }
+        else if (string.IsNullOrEmpty(Path.GetExtension(filePath)))
+        {
+            filePath += format == SerializationFormat.Yaml ? ".yaml" : ".json";
+        }
+
         // Git diff karmaşasını önlemek için deterministik alfabetik sıralama
         var orderedTerms = terms
             .OrderBy(t => t.EnglishTerm, StringComparer.OrdinalIgnoreCase)
@@ -69,9 +82,26 @@ public sealed class GlossarySerializationService : IGlossarySerializationService
 
     public async Task<IReadOnlyList<GlossaryEntry>> ImportAsync(string filePath, CancellationToken cancellationToken = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+
+        // Eğer klasör verildiyse içindeki glossary.yaml veya glossary.json dosyasını bul
+        if (Directory.Exists(filePath))
+        {
+            var yamlCandidate = Path.Combine(filePath, "glossary.yaml");
+            var jsonCandidate = Path.Combine(filePath, "glossary.json");
+            if (File.Exists(yamlCandidate))
+            {
+                filePath = yamlCandidate;
+            }
+            else if (File.Exists(jsonCandidate))
+            {
+                filePath = jsonCandidate;
+            }
+        }
+
         if (!File.Exists(filePath))
         {
-            throw new FileNotFoundException("Sözlük dosyası bulunamadı.", filePath);
+            throw new FileNotFoundException($"Sözlük dosyası bulunamadı: '{filePath}'", filePath);
         }
 
         var content = await File.ReadAllTextAsync(filePath, cancellationToken);

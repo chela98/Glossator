@@ -5,6 +5,7 @@
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.24.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.10.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
+    <PackageReference Include="System.Threading.RateLimiting" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
@@ -15,6 +16,7 @@
     <None Update="Prompts\*.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <EmbeddedResource Include="Prompts\*.md" />
   </ItemGroup>
 
   <PropertyGroup>

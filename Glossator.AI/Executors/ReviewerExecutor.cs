@@ -287,7 +287,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
     private static List<string> FindMissingMasks(string original, string translation)
     {
         var missing = new List<string>();
-        var matches = Regex.Matches(original, @"\[\[(INDEX|CODE)_\d+\]\]");
+        var matches = Regex.Matches(original, @"⟦PH_\d+⟧|\[\[(INDEX|CODE)_\d+\]\]");
         foreach (Match match in matches)
         {
             if (!translation.Contains(match.Value, StringComparison.Ordinal))

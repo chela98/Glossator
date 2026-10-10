@@ -5,13 +5,40 @@ using Microsoft.Extensions.AI;
 
 namespace Glossator.AI.Workflows;
 
-public class CyclicTranslationWorkflow
+/// <summary>
+/// Microsoft Agent Framework (MAF) durum makinesi tabanlı döngüsel çeviri iş akışı.
+/// StyleAnalyst -> Translator -> Reviewer zincirini kurar ve AddSwitch dallanmasıyla
+/// redaksiyon reddedildiğinde otomatik olarak Translator'a geri yönlendirir.
+/// </summary>
+public sealed class CyclicTranslationWorkflow
 {
+    public const int MaxReviewAttempts = 3;
+
+    private readonly IChatClient _styleAnalystClient;
     private readonly IChatClient _translatorClient;
     private readonly IChatClient _reviewerClient;
+    private readonly string _stylePrompt;
     private readonly string _translatorPrompt;
     private readonly string _reviewerPrompt;
     private readonly Action<PipelineStepLog>? _stepLogger;
+
+    public CyclicTranslationWorkflow(
+        IChatClient styleAnalystClient,
+        IChatClient translatorClient,
+        IChatClient reviewerClient,
+        string stylePrompt,
+        string translatorPrompt,
+        string reviewerPrompt,
+        Action<PipelineStepLog>? stepLogger = null)
+    {
+        _styleAnalystClient = styleAnalystClient;
+        _translatorClient = translatorClient;
+        _reviewerClient = reviewerClient;
+        _stylePrompt = stylePrompt;
+        _translatorPrompt = translatorPrompt;
+        _reviewerPrompt = reviewerPrompt;
+        _stepLogger = stepLogger;
+    }
 
     public CyclicTranslationWorkflow(
         IChatClient translatorClient,
@@ -19,38 +46,31 @@ public class CyclicTranslationWorkflow
         string translatorPrompt,
         string reviewerPrompt,
         Action<PipelineStepLog>? stepLogger = null)
+        : this(translatorClient, translatorClient, reviewerClient, string.Empty, translatorPrompt, reviewerPrompt, stepLogger)
     {
-        _translatorClient = translatorClient;
-        _reviewerClient = reviewerClient;
-        _translatorPrompt = translatorPrompt;
-        _reviewerPrompt = reviewerPrompt;
-        _stepLogger = stepLogger;
     }
 
     private Workflow CreateWorkflow()
     {
-        // Her çalışma için taze ve izole Executor örnekleri üretilir (Kanal & Durum İzolasyonu)
+        var styleAnalyst = new StyleAnalystExecutor(_styleAnalystClient, _stylePrompt, _stepLogger);
         var translator = new TranslatorExecutor(_translatorClient, _translatorPrompt, _stepLogger);
         var reviewer = new ReviewerExecutor(_reviewerClient, _reviewerPrompt, _stepLogger);
 
-        // 1. Başlangıç Düğümü: TranslatorExecutor
-        var builder = new WorkflowBuilder(translator);
-
-        // 2. Kenar 1: Translator çıktısı Reviewer'a akar
+        // 1. Başlangıç: StyleAnalyst (eğer üslup kılavuzu zaten doluysa 0 ms'de translator'a devreder)
+        var builder = new WorkflowBuilder(styleAnalyst);
+        builder.AddEdge(styleAnalyst, translator);
         builder.AddEdge(translator, reviewer);
 
-        // 3. Kenar 2 (DÖNGÜSEL KENAR): 
-        // Eğer Reviewer onay vermezse (IsApproved == false) akış tekrar Translator'a döner (Max 3 deneme)
-        builder.AddEdge<TranslationReviewState>(
-            reviewer, 
-            translator, 
-            condition: state => state != null && !state.IsApproved && state.AttemptCount <= 3);
+        // 2. MAF Resmi AddSwitch Durum Makinesi Dallanması
+        builder.AddSwitch(reviewer, sw =>
+        {
+            sw.AddCase<TranslationReviewState>(
+                state => state is { IsApproved: false } && state.AttemptCount <= MaxReviewAttempts,
+                translator);
+        });
 
-        // 4. Kenar 3 (ÇIKTI DÜĞÜMÜ):
-        // Onaylandığında nihai çıktı Reviewer'dan alınır
+        // 3. Onaylandığında veya deneme tükendiğinde çıktı Reviewer'dan alınır
         builder.WithOutputFrom(reviewer);
-
-        // 5. OpenTelemetry Telemetrisi (Aspire Dashboard & OTLP uyumlu)
         builder.WithOpenTelemetry(cfg => cfg.EnableSensitiveData = true);
 
         return builder.Build();
@@ -80,7 +100,7 @@ public class CyclicTranslationWorkflow
                 var workflow = CreateWorkflow();
                 Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken);
 
-                // 1. Onaylanmış nihai çıktıyı ara
+                // %100 Tip Güvenli WorkflowOutputEvent okuma (dynamic reflection hack kaldırıldı!)
                 var finalState = run.OutgoingEvents
                     .OfType<WorkflowOutputEvent>()
                     .Select(e => e.Data)
@@ -90,17 +110,6 @@ public class CyclicTranslationWorkflow
                 if (finalState != null && !string.IsNullOrWhiteSpace(finalState.CurrentTranslation))
                 {
                     return finalState.CurrentTranslation.Trim();
-                }
-
-                // 2. Güvenlik Ağı: Workflow sırasında üretilmiş son durum var mı?
-                var anyState = run.OutgoingEvents
-                    .Select(e => (e as dynamic)?.Data as TranslationReviewState)
-                    .Where(s => s != null && !string.IsNullOrWhiteSpace(s.CurrentTranslation))
-                    .LastOrDefault();
-
-                if (anyState != null && !string.IsNullOrWhiteSpace(anyState.CurrentTranslation))
-                {
-                    return anyState.CurrentTranslation.Trim();
                 }
 
                 break;

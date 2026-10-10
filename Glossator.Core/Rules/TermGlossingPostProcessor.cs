@@ -20,6 +20,14 @@ public class TermGlossingPostProcessor
         _tracker = tracker;
     }
 
+    /// <summary>
+    /// Yeni bir bölüme geçildiğinde terim sayacını izole etmek için çağrılır.
+    /// </summary>
+    public void BeginChapterScope(string scopeId)
+    {
+        _tracker.BeginNewScope(scopeId);
+    }
+
     private async Task<List<GlossaryEntry>> GetCachedTermsAsync()
     {
         if (_terms == null)

@@ -40,13 +40,24 @@ public class BookLocalizationPipeline
 
         Action<PipelineStepLog> logRelay = log => StepProgress?.Invoke(log);
 
-        // MAF Döngüsel İş Akışı: Translator <-> Reviewer (Her çalıştırmada taze ve izole örnekler)
+        // MAF Döngüsel İş Akışı: StyleAnalyst -> Translator <-> Reviewer
         _cyclicWorkflow = new CyclicTranslationWorkflow(
+            styleAnalystClient,
             translatorClient,
             reviewerClient,
+            stylePrompt,
             translatorPrompt,
             reviewerPrompt,
             logRelay);
+    }
+
+    /// <summary>
+    /// Yeni bir bölüme başlandığında terim sayaçlarını sıfırlar ve kapsamı izole eder.
+    /// </summary>
+    public void BeginChapterScope(string chapterScopeId)
+    {
+        _postProcessor.BeginChapterScope(chapterScopeId);
+        _cachedStyleGuide = string.Empty;
     }
 
     /// <summary>
@@ -114,54 +125,80 @@ public class BookLocalizationPipeline
             Summary: $"Konu Bölümü ({section.Title}): {section.Segments.Count} blok, {glossaryTerms.Count} sözlük terimi, {doNotTranslateTerms.Count} dokunulmaz terim",
             Content: glossaryTerms.Count > 0 ? string.Join(", ", glossaryTerms.Select(kv => $"{kv.Key} => {kv.Value}")) : "Özel terim yok"));
 
-        string reviewedText = string.Empty;
-        int maxRetries = 5;
-        int backoffDelayMs = 5000;
+        // 2. MAF Döngüsel İş Akışı: StyleAnalyst -> Translator <-> Reviewer
+        var reviewedText = await _cyclicWorkflow.ExecuteAsync(
+            promptText,
+            doNotTranslateTerms,
+            glossaryTerms,
+            activeStyleGuide,
+            cancellationToken);
 
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        // Güvenlik Ağı: Beklenmedik boş çıktıda doğrudan Translator ile kurtar
+        if (string.IsNullOrWhiteSpace(reviewedText))
         {
-            try
+            var fallbackMessages = new List<ChatMessage>
             {
-                reviewedText = await _cyclicWorkflow.ExecuteAsync(
-                    promptText,
-                    doNotTranslateTerms,
-                    glossaryTerms,
-                    activeStyleGuide,
-                    cancellationToken);
-
-                if (string.IsNullOrWhiteSpace(reviewedText))
-                {
-                    var fallbackMessages = new List<ChatMessage>
-                    {
-                        new(ChatRole.System, _translatorPrompt),
-                        new(ChatRole.User, $"[YAZAR ÜSLUP KILAVUZU]:\n{activeStyleGuide}\n\n[ÇEVRİLECEK METİN]:\n{promptText}")
-                    };
-                    var resp = await _translatorClient.GetResponseAsync(fallbackMessages, cancellationToken: cancellationToken);
-                    reviewedText = resp.Text?.Trim() ?? promptText;
-                }
-
-                break;
-            }
-            catch (Exception ex) when (ex.Message.Contains("429") || ex.ToString().Contains("TooManyRequests") || ex.ToString().Contains("Rate limit"))
-            {
-                if (attempt == maxRetries) throw;
-                StepProgress?.Invoke(new PipelineStepLog(
-                    Stage: "RateLimiter",
-                    Summary: $"API Kota Sınırı (429 Too Many Requests) - {backoffDelayMs / 1000}sn bekleniyor... (Deneme {attempt}/{maxRetries})",
-                    Content: ex.Message));
-                await Task.Delay(backoffDelayMs, cancellationToken);
-                backoffDelayMs *= 2;
-            }
+                new(ChatRole.System, _translatorPrompt),
+                new(ChatRole.User, $"[YAZAR ÜSLUP KILAVUZU]:\n{activeStyleGuide}\n\n[ÇEVRİLECEK METİN]:\n{promptText}")
+            };
+            var resp = await _translatorClient.GetResponseAsync(fallbackMessages, cancellationToken: cancellationToken);
+            reviewedText = resp.Text?.Trim() ?? promptText;
         }
 
         // 2. Blokları ayrıştırıp segmentlere yerleştir
         var unpacked = section.TryUnpackTranslations(reviewedText, out var missing);
-        if (!unpacked)
+        if (!unpacked && missing.Count > 0)
         {
             StepProgress?.Invoke(new PipelineStepLog(
                 Stage: "Warning",
-                Summary: $"Uyarı: {missing.Count} blok model çıktısında bulunamadı",
+                Summary: $"Uyarı: {missing.Count} blok model çıktısında eksik kaldı. Mikro kurtarma başlatılıyor...",
                 Content: string.Join(", ", missing.Select(m => $"BLOK_{m:D3}"))));
+
+            // Delta-Retry Kurtarma Döngüsü: Yalnızca eksik blokları çevirmek üzere mikro prompt gönder
+            try
+            {
+                var deltaSection = section.CreateDeltaSection(missing);
+                var deltaPrompt = $"[ACİL MİKRO KURTARMA: AŞAĞIDAKİ BLOKLAR EKSİK KALDI. LÜTFEN YALNIZCA BU BLOKLARI ÇEVİR VE ETİKETLERİNİ EKSİKSİZ KORU]:\n\n{deltaSection.ToPromptFormat()}";
+
+                var recoveryMessages = new List<ChatMessage>
+                {
+                    new(ChatRole.System, _translatorPrompt),
+                    new(ChatRole.User, $"[YAZAR ÜSLUP KILAVUZU]:\n{activeStyleGuide}\n\n{deltaPrompt}")
+                };
+
+                var deltaResp = await _translatorClient.GetResponseAsync(recoveryMessages, cancellationToken: cancellationToken);
+                if (!string.IsNullOrWhiteSpace(deltaResp.Text))
+                {
+                    deltaSection.TryUnpackTranslations(deltaResp.Text, out _);
+                    foreach (var dSeg in deltaSection.Segments)
+                    {
+                        if (!string.IsNullOrWhiteSpace(dSeg.TranslatedText))
+                        {
+                            var targetSeg = section.Segments.FirstOrDefault(s => s.Index == dSeg.Index);
+                            if (targetSeg != null)
+                            {
+                                targetSeg.TranslatedText = dSeg.TranslatedText;
+                            }
+                        }
+                    }
+
+                    missing = section.Segments.Where(s => string.IsNullOrWhiteSpace(s.TranslatedText)).Select(s => s.Index).ToList();
+                    if (missing.Count == 0)
+                    {
+                        StepProgress?.Invoke(new PipelineStepLog(
+                            Stage: "RecoverySuccess",
+                            Summary: "Eksik kalan tüm bloklar mikro kurtarma döngüsüyle başarıyla tamamlandı",
+                            Content: deltaResp.Text));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                StepProgress?.Invoke(new PipelineStepLog(
+                    Stage: "Warning",
+                    Summary: $"Mikro kurtarma sırasında hata oluştu: {ex.Message}",
+                    Content: ex.ToString()));
+            }
         }
 
         StepProgress?.Invoke(new PipelineStepLog(
@@ -206,46 +243,24 @@ public class BookLocalizationPipeline
             Summary: preProcessorSummary,
             Content: preProcessorContent));
 
-        string reviewedText = string.Empty;
-        int maxRetries = 5;
-        int backoffDelayMs = 5000;
+        // 2. MAF Döngüsel İş Akışı: StyleAnalyst -> Translator <-> Reviewer
+        var reviewedText = await _cyclicWorkflow.ExecuteAsync(
+            sectionText, 
+            doNotTranslateTerms, 
+            glossaryTerms, 
+            activeStyleGuide, 
+            cancellationToken);
 
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        // Güvenlik Ağı: Beklenmedik boş çıktıda doğrudan Translator ile kurtar
+        if (string.IsNullOrWhiteSpace(reviewedText))
         {
-            try
+            var fallbackMessages = new List<ChatMessage>
             {
-                // 2. MAF Cyclic Workflow (Translator <-> Reviewer)
-                reviewedText = await _cyclicWorkflow.ExecuteAsync(
-                    sectionText, 
-                    doNotTranslateTerms, 
-                    glossaryTerms,
-                    activeStyleGuide, 
-                    cancellationToken);
-
-                // Güvenlik Ağı: Eğer döngüsel iş akışından beklenmedik şekilde boş çıktı dönerse, doğrudan Translator ile kurtar
-                if (string.IsNullOrWhiteSpace(reviewedText))
-                {
-                    var fallbackMessages = new List<ChatMessage>
-                    {
-                        new(ChatRole.System, _translatorPrompt),
-                        new(ChatRole.User, $"[YAZAR ÜSLUP KILAVUZU]:\n{activeStyleGuide}\n\n[ÇEVRİLECEK METİN]:\n{sectionText}")
-                    };
-                    var resp = await _translatorClient.GetResponseAsync(fallbackMessages, cancellationToken: cancellationToken);
-                    reviewedText = resp.Text?.Trim() ?? sectionText;
-                }
-
-                break;
-            }
-            catch (Exception ex) when (ex.Message.Contains("429") || ex.ToString().Contains("TooManyRequests") || ex.ToString().Contains("Rate limit"))
-            {
-                if (attempt == maxRetries) throw;
-                StepProgress?.Invoke(new PipelineStepLog(
-                    Stage: "RateLimiter",
-                    Summary: $"API Kota Sınırı (429 Too Many Requests) - {backoffDelayMs / 1000}sn bekleniyor... (Deneme {attempt}/{maxRetries})",
-                    Content: ex.Message));
-                await Task.Delay(backoffDelayMs, cancellationToken);
-                backoffDelayMs *= 2;
-            }
+                new(ChatRole.System, _translatorPrompt),
+                new(ChatRole.User, $"[YAZAR ÜSLUP KILAVUZU]:\n{activeStyleGuide}\n\n[ÇEVRİLECEK METİN]:\n{sectionText}")
+            };
+            var resp = await _translatorClient.GetResponseAsync(fallbackMessages, cancellationToken: cancellationToken);
+            reviewedText = resp.Text?.Trim() ?? sectionText;
         }
 
         // 3. Post-Processing: Başlık değilse 1 ve 2. kullanımlara deterministik parantez enjeksiyonu
