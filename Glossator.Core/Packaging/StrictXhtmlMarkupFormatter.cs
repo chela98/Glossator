@@ -15,7 +15,7 @@ public sealed class StrictXhtmlMarkupFormatter : IMarkupFormatter
 
     private static readonly HashSet<string> VoidElements = new(StringComparer.OrdinalIgnoreCase)
     {
-        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "woff"
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr", "woff"
     };
 
     public string OpenTag(IElement element, bool selfClosing)
@@ -65,10 +65,11 @@ public sealed class StrictXhtmlMarkupFormatter : IMarkupFormatter
             return true;
         }
 
-        // SVG ve MathML altındaki boş elemanlar self-closing olabilir
-        if (element.NamespaceUri is "http://www.w3.org/2000/svg" or "http://www.w3.org/1998/Math/MathML")
+        // SVG ve MathML altındaki boş elemanlar self-closing olmalıdır
+        if (element.NamespaceUri is "http://www.w3.org/2000/svg" or "http://www.w3.org/1998/Math/MathML"
+            || element.Owner?.ContentType is "image/svg+xml")
         {
-            return selfClosing && !element.HasChildNodes;
+            return !element.HasChildNodes;
         }
 
         return false;
@@ -116,17 +117,65 @@ public sealed class StrictXhtmlMarkupFormatter : IMarkupFormatter
 public static class DocumentXhtmlExtensions
 {
     /// <summary>
-    /// IDocument belgesini katı W3C EPUB 3 / XHTML 1.0 standartlarında XML olarak serileştirir.
+    /// Kök etiket dışındaki yapısal ve metinsel elemanlarda kalan çelişkili yabancı dil özniteliklerini
+    /// (lang="en*", xml:lang="en*") temizler, böylece tüm belge kökteki lang="tr" etiketini miras alır.
+    /// Kod blokları (code, pre, kbd, samp) bu temizlikten muaf tutulur.
     /// </summary>
-    public static string ToStrictXhtml(this IDocument document)
+    public static void CleanConflictingLanguageAttributes(this IDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        // html kök etiketinde xmlns="http://www.w3.org/1999/xhtml" garantile
-        var htmlElement = document.DocumentElement;
-        if (htmlElement != null && string.IsNullOrEmpty(htmlElement.GetAttribute("xmlns")))
+        var root = document.DocumentElement;
+        if (root == null) return;
+
+        var allElements = document.QuerySelectorAll("*");
+        foreach (var el in allElements)
         {
-            htmlElement.SetAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+            if (ReferenceEquals(el, root)) continue;
+
+            // Kod bloklarını ve teknik etiketleri atla
+            var tagName = el.TagName.ToLowerInvariant();
+            if (tagName is "code" or "pre" or "kbd" or "samp") continue;
+            if (el.Closest("code, pre, kbd, samp") != null) continue;
+
+            var lang = el.GetAttribute("lang");
+            if (!string.IsNullOrEmpty(lang) && lang.StartsWith("en", StringComparison.OrdinalIgnoreCase))
+            {
+                el.RemoveAttribute("lang");
+            }
+
+            var xmlLang = el.GetAttribute("xml:lang");
+            if (!string.IsNullOrEmpty(xmlLang) && xmlLang.StartsWith("en", StringComparison.OrdinalIgnoreCase))
+            {
+                el.RemoveAttribute("xml:lang");
+            }
+        }
+    }
+
+    /// <summary>
+    /// IDocument belgesini katı W3C EPUB 3 / XHTML 1.0 standartlarında XML olarak serileştirir.
+    /// Kök html etiketine lang="tr", xml:lang="tr" ve xmlns="http://www.w3.org/1999/xhtml" özniteliklerini
+    /// enjekte eder; gövdede kalan çelişkili İngilizce dil etiketlerini temizler.
+    /// </summary>
+    public static string ToStrictXhtml(this IDocument document, string defaultLanguage = "tr")
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        // html kök etiketinde xmlns="http://www.w3.org/1999/xhtml", lang ve xml:lang garantile
+        var htmlElement = document.DocumentElement;
+        if (htmlElement != null)
+        {
+            if (string.IsNullOrEmpty(htmlElement.GetAttribute("xmlns")))
+            {
+                htmlElement.SetAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+            }
+
+            if (!string.IsNullOrWhiteSpace(defaultLanguage))
+            {
+                htmlElement.SetAttribute("lang", defaultLanguage);
+                htmlElement.SetAttribute("xml:lang", defaultLanguage);
+                document.CleanConflictingLanguageAttributes();
+            }
         }
 
         using var writer = new StringWriter();

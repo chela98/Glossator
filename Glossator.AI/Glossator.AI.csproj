@@ -13,9 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Prompts\*.md">
+    <Content Include="Prompts\*.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <EmbeddedResource Include="Prompts\*.md" />
   </ItemGroup>
 

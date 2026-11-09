@@ -53,7 +53,10 @@ public static class EpubDocumentClassifier
         }
 
         // 4. Alfabetik Dizin / Fihrist (Index) - LLM Çevirisinden muaf
-        if (baseName.StartsWith("ix") ||
+        if (baseName.Equals("ix", StringComparison.OrdinalIgnoreCase) ||
+            baseName.StartsWith("ix0", StringComparison.OrdinalIgnoreCase) ||
+            baseName.StartsWith("ix_", StringComparison.OrdinalIgnoreCase) ||
+            baseName.StartsWith("ix-", StringComparison.OrdinalIgnoreCase) ||
             baseName.Contains("index") ||
             baseName.Contains("fihrist"))
         {
@@ -62,10 +65,10 @@ public static class EpubDocumentClassifier
 
         // 5. Destekleyici / Ek Sayfalar (Auxiliary)
         if (baseName.Contains("glossary") || baseName.Contains("sozluk") ||
-            baseName.Contains("colophon") || baseName.Contains("author") ||
+            baseName.Contains("colophon") || baseName.Contains("about-author") || baseName.Contains("about-the-author") || baseName.Contains("author-bio") || baseName.Equals("author", StringComparison.OrdinalIgnoreCase) ||
             baseName.Contains("preface") || baseName.Contains("foreword") ||
             baseName.Contains("dedication") || baseName.Contains("praise") ||
-            baseName.Contains("appendix") || baseName.Contains("ack"))
+            baseName.Contains("appendix") || baseName.Contains("acknowledg") || baseName.Equals("ack", StringComparison.OrdinalIgnoreCase) || baseName.StartsWith("ack-", StringComparison.OrdinalIgnoreCase) || baseName.StartsWith("ack_", StringComparison.OrdinalIgnoreCase))
         {
             return EpubDocumentRole.Auxiliary;
         }

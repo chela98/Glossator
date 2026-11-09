@@ -18,13 +18,12 @@ public static class EpubIndexReader
         "learning", "interaction", "communication", "aggregation", "operations", "operation",
         "principles", "system", "systems", "types", "memory", "testing", "risks", "risk",
         "compliance", "consistency", "coherence", "coordination", "privacy", "security",
-        "benefits", "example", "examples", "swarms", "swarm", "video", "voice", "speech",
-        "text", "graphs", "chains", "interfaces", "governance", "adoption", "alignment"
+        "benefits", "example", "examples"
     };
 
     /// <summary>
-    /// EPUB dizin (index) dosyasından YALNIZCA en üst seviyedeki (kök) ana teknik kavramları çeker.
-    /// Genel sözlük kelimelerini eler, yalnızca gerçek teknik kavramları alır.
+    /// EPUB dizin (index) dosyasından en üst seviyedeki ana teknik kavramları çeker.
+    /// O'Reilly, Packt ve Wiley yayıncılarının dizin şablonlarını evrensel olarak destekler.
     /// </summary>
     public static List<GlossaryEntry> Read(EpubPackage package)
     {
@@ -35,23 +34,58 @@ public static class EpubIndexReader
         var document = Parser.ParseDocument(htmlContent);
         var entries = new List<GlossaryEntry>();
         var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // Kök seviyedeki liste elemanları
+
+        // Kök seviyedeki liste elemanları (O'Reilly, Packt, Wiley, EPUB3)
         var rootListItems = document.QuerySelectorAll("div[data-type='indexdiv'] > ul > li");
+        if (rootListItems.Length == 0)
+        {
+            rootListItems = document.QuerySelectorAll("nav[epub\\:type='index'] li, div.index li, section.index li, ul.index-list li, div.index-group li");
+        }
+
         foreach (var li in rootListItems)
         {
+            string? rawTerm = null;
             var termSpan = li.Children.FirstOrDefault(c =>
                 c.TagName.Equals("SPAN", StringComparison.OrdinalIgnoreCase) &&
                 c.GetAttribute("data-type") == "index-term");
-            if (termSpan == null) continue;
-            var rawTerm = termSpan.TextContent.Trim();
+
+            if (termSpan != null)
+            {
+                rawTerm = termSpan.TextContent.Trim();
+            }
+            else
+            {
+                var aTerm = li.QuerySelector("a.index-term, span.index-term");
+                if (aTerm != null)
+                {
+                    rawTerm = aTerm.TextContent.Trim();
+                }
+                else
+                {
+                    var firstA = li.QuerySelector("a");
+                    if (firstA != null && li.TextContent.Contains(firstA.TextContent))
+                    {
+                        var idx = li.TextContent.IndexOf(firstA.TextContent, StringComparison.Ordinal);
+                        rawTerm = idx > 0 ? li.TextContent[..idx].Trim() : firstA.TextContent.Trim();
+                    }
+                    else
+                    {
+                        rawTerm = li.TextContent.Trim();
+                    }
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(rawTerm) || rawTerm.Length < 2) continue;
-            // 1. VİRGÜL KURALI: Virgülün solundaki gerçek teknik kavramı al!
+
+            // Virgül kuralı: Virgülün solundaki gerçek teknik kavramı al
             if (rawTerm.Contains(','))
             {
                 rawTerm = rawTerm.Split(',')[0].Trim();
             }
+
             var normalized = rawTerm.ToLowerInvariant();
             if (ExcludedGenericTerms.Contains(normalized)) continue;
+
             if (seenKeys.Add(normalized))
             {
                 entries.Add(new GlossaryEntry

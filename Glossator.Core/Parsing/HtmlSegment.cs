@@ -19,16 +19,26 @@ public class HtmlSegment
     public IReadOnlyList<MaskingToken> Tokens { get; init; } = [];
 
     /// <summary>
-    /// Yer tutucu -> Orijinal HTML parçası eşleştirmesi (geriye dönük uyumluluk).
-    /// </summary>
-    public Dictionary<string, string> Placeholders { get; init; } = [];
-
-    /// <summary>
     /// AngleSharp DOM ağacındaki orijinal element referansı (çeviri bitince doğrudan güncellenir).
     /// </summary>
     public IElement DomElement { get; init; } = null!;
 
     public string? TranslatedText { get; set; }
+
+    /// <summary>
+    /// Segmentin yalnızca yer tutuculardan, sayılardan veya noktalama işaretlerinden oluşup oluşmadığını (doğal dil içermediğini) kontrol eder.
+    /// Saf teknik bloklarda TranslatedText == MaskedText olması beklenen bir durumdur.
+    /// </summary>
+    public bool IsPureTechnicalOrPlaceholder()
+    {
+        return DomTreeWalkerMasker.IsPureTechnicalOrPlaceholder(MaskedText);
+    }
+
+    /// <summary>
+    /// DOM ağacında özel düğüm değişimi gereken karmaşık yapılar (örn. alt listeler içeren li) için özel değiştirme aksiyonu.
+    /// Null ise varsayılan olarak DomElement.InnerHtml güncellenir.
+    /// </summary>
+    public Action<string>? ReplacementAction { get; init; }
 
     /// <summary>
     /// Çevrilen metindeki belirteçleri orijinal HTML parçalarıyla deterministik olarak geri takar.
@@ -45,15 +55,6 @@ public class HtmlSegment
         if (Tokens != null && Tokens.Count > 0)
         {
             return DomTreeWalkerMasker.RestorePlaceholders(text, Tokens);
-        }
-
-        if (Placeholders != null && Placeholders.Count > 0)
-        {
-            var ordered = Placeholders.OrderByDescending(p => p.Key.Length).ThenByDescending(p => p.Key);
-            foreach (var (placeholder, originalHtml) in ordered)
-            {
-                text = text.Replace(placeholder, originalHtml, StringComparison.Ordinal);
-            }
         }
 
         return text;

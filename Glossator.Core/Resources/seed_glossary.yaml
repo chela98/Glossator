@@ -1,0 +1,245 @@
+version: "1.0"
+terms:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 1. AlwaysEnglish (Dokunulmaz Sektör Kısaltmaları, Markalar ve Protokoller)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - english: "API"
+    turkish: "API"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "Docker"
+    turkish: "Docker"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "Git"
+    turkish: "Git"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "JSON"
+    turkish: "JSON"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "Kubernetes"
+    turkish: "Kubernetes"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "LLM"
+    turkish: "LLM"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "LLMs"
+    turkish: "LLMs"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "OpenTelemetry"
+    turkish: "OpenTelemetry"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "REST"
+    turkish: "REST"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "SDK"
+    turkish: "SDK"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "SQL"
+    turkish: "SQL"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  - english: "YAML"
+    turkish: "YAML"
+    policy: AlwaysEnglish
+    reviewed: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 2. AlwaysTurkish (Düz Teknik Kavramlar - Asla İngilizce Parantez Açılmaz)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - english: "cache"
+    turkish: "önbellek"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "cost"
+    turkish: "maliyet"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "costs"
+    turkish: "maliyetler"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "data"
+    turkish: "veri"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "dataset"
+    turkish: "veri seti"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "datasets"
+    turkish: "veri setleri"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "human oversight"
+    turkish: "insan denetimi"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "latency"
+    turkish: "gecikme"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "model"
+    turkish: "model"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "models"
+    turkish: "modeller"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "pipeline"
+    turkish: "boru hattı"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "pipelines"
+    turkish: "boru hatları"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "queue"
+    turkish: "kuyruk"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "throughput"
+    turkish: "işlem hacmi"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "tool"
+    turkish: "araç"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "tools"
+    turkish: "araçlar"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "workflow"
+    turkish: "iş akışı"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  - english: "workflows"
+    turkish: "iş akışları"
+    policy: AlwaysTurkish
+    reviewed: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # 3. ProgressiveGloss (Pedagojik Hibrit Jargon - İlk 2 Geçiş Parantezli, Sonra Türkçe)
+  # ─────────────────────────────────────────────────────────────────────────────
+  - english: "autonomous agent"
+    turkish: "otonom ajan"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "autonomous agents"
+    turkish: "otonom ajanlar"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "boilerplate"
+    turkish: "hazır kod"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "boilerplate code"
+    turkish: "hazır kalıp kod"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "context window"
+    turkish: "bağlam penceresi"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "dependency injection"
+    turkish: "bağımlılık enjeksiyonu"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "event-driven"
+    turkish: "olay güdümlü"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "few-shot learning"
+    turkish: "az örnekli öğrenme"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "fine-tuning"
+    turkish: "ince ayar"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "garbage collection"
+    turkish: "çöp toplama"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "load balancing"
+    turkish: "yük dengeleme"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "machine learning"
+    turkish: "makine öğrenimi"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "prompt engineering"
+    turkish: "istem mühendisliği"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "rate limiting"
+    turkish: "istek hız sınırlama"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "vector database"
+    turkish: "vektör veritabanı"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "vector databases"
+    turkish: "vektör veritabanları"
+    policy: ProgressiveGloss
+    reviewed: true
+
+  - english: "zero-shot learning"
+    turkish: "sıfır örnekli öğrenme"
+    policy: ProgressiveGloss
+    reviewed: true

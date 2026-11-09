@@ -3,8 +3,10 @@ using System.Reflection;
 namespace Glossator.AI.Prompts;
 
 /// <summary>
-/// Sistem istemlerini (prompt) derlenmiş gömülü kaynaklardan (Embedded Resource) veya
-/// uygulama çıktı dizininden çalışma dizininden bağımsız olarak yükleyen servis.
+/// promptları deterministik bir hiyerarşiyle yükleyen servis:
+/// 1. Birincil Öncelik: EXE yanındaki "Prompts/{fileName}" klasörü veya doğrudan EXE yanı "{fileName}" (kullanıcı özelleştirmesi).
+/// 2. İkincil Öncelik (Fallback): Derlenmiş DLL içindeki gömülü kaynak (Embedded Resource).
+/// Rastgele terminal dizinleri (CWD) taranmaz; böylece istem dışı eski prompt gölgelemesi (shadowing) engellenir.
 /// </summary>
 public static class PromptLoader
 {
@@ -12,7 +14,22 @@ public static class PromptLoader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
 
-        // 1. Birincil Kaynak: Assembly Embedded Resource (100% taşınabilir, disk yoluna bağımsız)
+        // 1. Birincil Öncelik: AppContext.BaseDirectory / Prompts / <fileName> (EXE yanındaki Prompts klasörü)
+        var exePromptsPath = Path.Combine(AppContext.BaseDirectory, "Prompts", fileName);
+        if (File.Exists(exePromptsPath))
+        {
+            return await File.ReadAllTextAsync(exePromptsPath, ct);
+        }
+
+        // 2. İkincil Öncelik: Doğrudan AppContext.BaseDirectory / <fileName> (Doğrudan EXE yanı)
+        var directExePath = Path.Combine(AppContext.BaseDirectory, fileName);
+        if (File.Exists(directExePath))
+        {
+            return await File.ReadAllTextAsync(directExePath, ct);
+        }
+
+        // 3. Nihai Güvenli Kaynak (Embedded Resource Fallback):
+        // Disk üzerinde kullanıcı tarafından özelleştirilmiş dosya yoksa DLL içine derlenmiş varsayılan istemi kullan.
         var assembly = typeof(PromptLoader).Assembly;
         var resourceName = assembly.GetManifestResourceNames()
             .FirstOrDefault(n => n.EndsWith($".Prompts.{fileName}", StringComparison.OrdinalIgnoreCase) ||
@@ -28,28 +45,7 @@ public static class PromptLoader
             }
         }
 
-        // 2. İkincil Kaynak: AppContext.BaseDirectory/Prompts/<fileName>
-        var path = Path.Combine(AppContext.BaseDirectory, "Prompts", fileName);
-        if (File.Exists(path))
-        {
-            return await File.ReadAllTextAsync(path, ct);
-        }
-
-        // 3. Üçüncül Kaynak: AppContext.BaseDirectory/<fileName>
-        var directPath = Path.Combine(AppContext.BaseDirectory, fileName);
-        if (File.Exists(directPath))
-        {
-            return await File.ReadAllTextAsync(directPath, ct);
-        }
-
-        // 4. Son Çare: Mevcut çalışma dizini
-        var workingDirPath = Path.Combine(Directory.GetCurrentDirectory(), "Prompts", fileName);
-        if (File.Exists(workingDirPath))
-        {
-            return await File.ReadAllTextAsync(workingDirPath, ct);
-        }
-
         throw new FileNotFoundException(
-            $"Prompt dosyası '{fileName}' gömülü kaynaklarda veya '{AppContext.BaseDirectory}' altında bulunamadı.");
+            $"Prompt dosyası '{fileName}' disk üzerinde ({AppContext.BaseDirectory}) veya gömülü kaynaklarda bulunamadı.");
     }
 }

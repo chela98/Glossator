@@ -94,7 +94,7 @@ public sealed class GlossaryEditCommand(SqliteGlossaryRepository repository) : A
             }
             else
             {
-                AnsiConsole.MarkupLine($"[bold yellow]⚠ '{settings.Policy}' geçersiz politika; politika değiştirilmedi.[/]");
+                AnsiConsole.MarkupLine($"[bold yellow]Uyarı:[/] '{settings.Policy}' geçersiz politika; politika değiştirilmedi.");
             }
         }
         else if (!Console.IsInputRedirected)
@@ -129,9 +129,9 @@ public sealed class GlossaryEditCommand(SqliteGlossaryRepository repository) : A
                 $"[bold white]İngilizce:[/] [cyan]{Markup.Escape(existing.EnglishTerm)}[/]\n" +
                 $"[bold white]Türkçe:[/] [green]{Markup.Escape(existing.TurkishTerm ?? "-")}[/]\n" +
                 $"[bold white]Politika:[/] [yellow]{existing.Policy}[/]\n" +
-                $"[bold white]Onaylı:[/] {(existing.IsReviewed ? "[green]✔ Evet[/]" : "[yellow]⚠ Hayır[/]")}"
+                $"[bold white]Onaylı:[/] {(existing.IsReviewed ? "[green]Evet[/]" : "[yellow]Hayır[/]")}"
             ))
-            .Header("[bold green]✔ Terim Başarıyla Güncellendi[/]")
+            .Header("[bold green]OK: Terim Başarıyla Güncellendi[/]")
             .BorderColor(Color.Green);
 
         AnsiConsole.Write(panel);

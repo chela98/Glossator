@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -6,7 +6,6 @@ using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using Glossator.Core.Models.Epub;
 using Glossator.Core.Security;
-using Glossator.Core.Workspace;
 
 namespace Glossator.Core.Packaging;
 
@@ -16,22 +15,10 @@ namespace Glossator.Core.Packaging;
 /// </summary>
 public static class EpubPackager
 {
+    private static readonly UTF8Encoding Utf8WithoutBom = new(encoderShouldEmitUTF8Identifier: false);
     private static readonly HtmlParser Parser = new();
     private static readonly XNamespace DcNs = "http://purl.org/dc/elements/1.1/";
-    private static readonly XNamespace DctermsNs = "http://purl.org/dc/terms/";
     private static readonly XNamespace OpfNs = "http://www.idpf.org/2007/opf";
-    private static readonly XNamespace NcxNs = "http://www.daisy.org/z3986/2005/ncx/";
-
-    /// <summary>
-    /// Aktif IWorkspaceSession üzerinden staging klasöründe arşivi oluşturup nihai hedefe atomik teslim eder.
-    /// </summary>
-    public static async Task<string> PackageAsync(IWorkspaceSession session, CancellationToken cancellationToken = default)
-    {
-        var stagingArchivePath = Path.Combine(session.StagingDirectory, "package.staging.epub");
-        CreateEpubArchive(session.Package, stagingArchivePath);
-        await session.CommitOutputAsync(stagingArchivePath, cancellationToken);
-        return session.ResolvedOutputPath;
-    }
 
     /// <summary>
     /// Verilen paketteki tüm çevirileri ve kaynakları birleştirerek geçerli bir .epub dosyası üretir.
@@ -106,13 +93,13 @@ public static class EpubPackager
             {
                 // Standart container.xml oluştur
                 var containerEntry = zip.CreateEntry("META-INF/container.xml", CompressionLevel.Optimal);
-                using var cw = new StreamWriter(containerEntry.Open(), Encoding.UTF8);
+                using var cw = new StreamWriter(containerEntry.Open(), Utf8WithoutBom);
                 cw.Write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile full-path=\"" + opfRelativePath + "\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>");
             }
 
             // KURAL 3: Güncellenmiş OPF'yi yaz
             var opfEntry = zip.CreateEntry(opfRelativePath, CompressionLevel.Optimal);
-            using (var ow = new StreamWriter(opfEntry.Open(), Encoding.UTF8))
+            using (var ow = new StreamWriter(opfEntry.Open(), Utf8WithoutBom))
             {
                 ow.Write(syncedOpfContent);
             }
@@ -121,7 +108,7 @@ public static class EpubPackager
             if (!string.IsNullOrEmpty(ncxRelativePath) && !string.IsNullOrEmpty(syncedNcxContent))
             {
                 var ncxEntry = zip.CreateEntry(ncxRelativePath, CompressionLevel.Optimal);
-                using var nw = new StreamWriter(ncxEntry.Open(), Encoding.UTF8);
+                using var nw = new StreamWriter(ncxEntry.Open(), Utf8WithoutBom);
                 nw.Write(syncedNcxContent);
             }
 
@@ -129,7 +116,7 @@ public static class EpubPackager
             if (!string.IsNullOrEmpty(navRelativePath) && !string.IsNullOrEmpty(syncedNavContent))
             {
                 var navEntry = zip.CreateEntry(navRelativePath, CompressionLevel.Optimal);
-                using var navW = new StreamWriter(navEntry.Open(), Encoding.UTF8);
+                using var navW = new StreamWriter(navEntry.Open(), Utf8WithoutBom);
                 navW.Write(syncedNavContent);
             }
 
@@ -158,9 +145,12 @@ public static class EpubPackager
                 else
                 {
                     // Orijinal dosya (görsel, css, font veya çevrilmemiş kapak vb.)
-                    actualFileOnDisk = Path.Combine(opfDir, item.Href);
+                    var safeHref = item.Href.Replace('\\', '/').TrimStart('/');
+                    if (safeHref.Contains("../") || safeHref.Contains("/..")) continue;
+                    actualFileOnDisk = Path.Combine(opfDir, safeHref);
                     var opfRelativePrefix = Path.GetRelativePath(rootDir, opfDir).Replace('\\', '/');
-                    zipEntryName = opfRelativePrefix == "." ? item.Href : $"{opfRelativePrefix}/{item.Href}";
+                    zipEntryName = opfRelativePrefix == "." ? safeHref : $"{opfRelativePrefix}/{safeHref}";
+                    if (!Path.GetFullPath(actualFileOnDisk).StartsWith(Path.GetFullPath(rootDir), StringComparison.OrdinalIgnoreCase)) continue;
                 }
 
                 if (handledPaths.Contains(zipEntryName)) continue;
@@ -171,10 +161,10 @@ public static class EpubPackager
                     if (actualFileOnDisk.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
                         actualFileOnDisk.EndsWith(".xhtml", StringComparison.OrdinalIgnoreCase))
                     {
-                        var rawHtml = File.ReadAllText(actualFileOnDisk, Encoding.UTF8);
-                        var validXhtml = EnsureValidXhtml(rawHtml);
+                        var rawHtml = File.ReadAllText(actualFileOnDisk, Utf8WithoutBom);
+                        var validXhtml = SynchronizeDocument(rawHtml, item.Href, translationMap);
                         var htmlEntry = zip.CreateEntry(zipEntryName, CompressionLevel.Optimal);
-                        using var hw = new StreamWriter(htmlEntry.Open(), Encoding.UTF8);
+                        using var hw = new StreamWriter(htmlEntry.Open(), Utf8WithoutBom);
                         hw.Write(validXhtml);
                     }
                     else
@@ -187,7 +177,8 @@ public static class EpubPackager
     }
 
     /// <summary>
-    /// Paketteki HTML dosyalarından hangilerinin *_tr.html karşılığı olduğunu tespit eder.
+    /// Paketteki HTML/XHTML belgelerinden hangilerinin çevrilmiş karşılığı olduğunu tespit eder.
+    /// Hem orijinal uzantıyı (.xhtml / .html) hem de alternatif uzantı varyasyonlarını destekler.
     /// </summary>
     public static Dictionary<string, string> DiscoverTranslations(EpubPackage package)
     {
@@ -203,6 +194,7 @@ public static class EpubPackager
             // Zaten _tr dosyasıysa atla
             if (baseName.EndsWith("_tr", StringComparison.OrdinalIgnoreCase)) continue;
 
+            // 1. Öncelik: Orijinal uzantı ile ara (örn: .xhtml)
             var trFileName = $"{baseName}_tr{ext}";
             var trRelativeHref = string.IsNullOrEmpty(dirName) ? trFileName : Path.Combine(dirName, trFileName).Replace('\\', '/');
             var trFullPath = Path.Combine(package.OpfDirectory, trRelativeHref);
@@ -210,6 +202,24 @@ public static class EpubPackager
             if (File.Exists(trFullPath))
             {
                 map[item.Href] = trRelativeHref;
+                continue;
+            }
+
+            // 2. Alternatif: .html, .xhtml, .htm uzantı varyasyonlarını ara
+            var candidateExtensions = new[] { ".xhtml", ".html", ".htm" };
+            foreach (var altExt in candidateExtensions)
+            {
+                if (altExt.Equals(ext, StringComparison.OrdinalIgnoreCase)) continue;
+
+                var altFileName = $"{baseName}_tr{altExt}";
+                var altRelativeHref = string.IsNullOrEmpty(dirName) ? altFileName : Path.Combine(dirName, altFileName).Replace('\\', '/');
+                var altFullPath = Path.Combine(package.OpfDirectory, altRelativeHref);
+
+                if (File.Exists(altFullPath))
+                {
+                    map[item.Href] = altRelativeHref;
+                    break;
+                }
             }
         }
 
@@ -219,9 +229,10 @@ public static class EpubPackager
     /// <summary>
     /// OPF dosyasını Türkçe metadata ve çevrilmiş manifest/spine linkleriyle günceller.
     /// </summary>
-    private static (string Content, string RelativePath) PrepareSynchronizedOpf(
+    public static (string Content, string RelativePath) PrepareSynchronizedOpf(
         EpubPackage package,
-        Dictionary<string, string> translationMap)
+        Dictionary<string, string> translationMap,
+        string targetLanguage = "tr")
     {
         var opfPath = ResolveOpfFullPath(package);
         var rootDir = package.RootDirectory;
@@ -229,15 +240,41 @@ public static class EpubPackager
 
         var doc = XDocument.Load(opfPath);
 
-        // 1. Dili güncelle
-        var langEl = doc.Descendants(DcNs + "language").FirstOrDefault()
-                     ?? doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "language");
-        if (langEl != null) langEl.Value = "tr";
+        // 1. Dili güncelle: Tüm dc:language ve meta language tanımlarını hedef dile çek
+        var langElements = doc.Descendants().Where(e =>
+            e.Name == DcNs + "language" || e.Name.LocalName == "language").ToList();
+
+        if (langElements.Count > 0)
+        {
+            langElements[0].Value = targetLanguage;
+            for (int i = 1; i < langElements.Count; i++)
+            {
+                langElements[i].Remove();
+            }
+        }
+        else
+        {
+            var metadataEl = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "metadata");
+            metadataEl?.Add(new XElement(DcNs + "language", targetLanguage));
+        }
 
         var metaLangs = doc.Descendants().Where(e =>
             e.Name.LocalName == "meta" &&
-            (e.Attribute("property")?.Value == "dcterms:language" || e.Attribute("id")?.Value == "meta-language"));
-        foreach (var ml in metaLangs) ml.Value = "tr";
+            (e.Attribute("property")?.Value == "dcterms:language" ||
+             e.Attribute("id")?.Value == "meta-language" ||
+             e.Attribute("name")?.Value == "dcterms.language")).ToList();
+        foreach (var ml in metaLangs) ml.Value = targetLanguage;
+
+        // Kök <package> etiketindeki xml:lang ve lang özniteliklerini senkronize et
+        if (doc.Root != null)
+        {
+            var xmlLangAttr = doc.Root.Attribute(XNamespace.Xml + "lang") 
+                           ?? doc.Root.Attributes().FirstOrDefault(a => a.Name.LocalName == "lang");
+            if (xmlLangAttr != null)
+            {
+                xmlLangAttr.Value = targetLanguage;
+            }
+        }
 
         // 2. Başlığa (Türkçe) ekle
         var titleEl = doc.Descendants(DcNs + "title").FirstOrDefault()
@@ -247,7 +284,7 @@ public static class EpubPackager
             titleEl.Value = $"{titleEl.Value} (Türkçe)";
         }
 
-        // 3. Manifest öğelerini güncelle: Orijinal HTML yerine _tr.html dosyalarını eşle
+        // 3. Manifest öğelerini güncelle: Orijinal HTML yerine _tr dosyalarını eşle ve media-type'ı garantiye al
         var itemElements = doc.Descendants().Where(e => e.Name.LocalName == "item").ToList();
         foreach (var itemEl in itemElements)
         {
@@ -255,10 +292,40 @@ public static class EpubPackager
             if (!string.IsNullOrEmpty(href) && translationMap.TryGetValue(href, out var trHref))
             {
                 itemEl.SetAttributeValue("href", trHref);
+                if (trHref.EndsWith(".xhtml", StringComparison.OrdinalIgnoreCase) ||
+                    trHref.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                {
+                    itemEl.SetAttributeValue("media-type", "application/xhtml+xml");
+                }
             }
         }
 
-        return (doc.ToString(), relativePath);
+        // 4. EPUB 3 dcterms:modified meta etiketini güncelle (W3C standardı)
+        var modifiedEl = doc.Descendants().FirstOrDefault(e =>
+            e.Name.LocalName == "meta" &&
+            (e.Attribute("property")?.Value == "dcterms:modified" || e.Attribute("id")?.Value == "meta-modified"));
+        if (modifiedEl != null)
+        {
+            modifiedEl.Value = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+        }
+
+        return (SerializeXDocument(doc), relativePath);
+    }
+
+    private static string SerializeXDocument(XDocument doc)
+    {
+        var sb = new StringBuilder();
+        var settings = new System.Xml.XmlWriterSettings
+        {
+            OmitXmlDeclaration = false,
+            Encoding = Utf8WithoutBom,
+            Indent = true
+        };
+        using (var writer = System.Xml.XmlWriter.Create(sb, settings))
+        {
+            doc.Save(writer);
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -283,6 +350,24 @@ public static class EpubPackager
 
         var doc = XDocument.Load(ncxFullPath);
 
+        // 1. Kök ncx dilini ve docTitle'ı senkronize et
+        if (doc.Root != null)
+        {
+            var xmlLang = doc.Root.Attribute(XNamespace.Xml + "lang")
+                       ?? doc.Root.Attributes().FirstOrDefault(a => a.Name.LocalName == "lang");
+            if (xmlLang != null)
+            {
+                xmlLang.Value = "tr";
+            }
+        }
+
+        var docTitleText = doc.Descendants().FirstOrDefault(e => e.Name.LocalName == "docTitle")?
+                              .Descendants().FirstOrDefault(e => e.Name.LocalName == "text");
+        if (docTitleText != null && !docTitleText.Value.Contains("Türkçe", StringComparison.OrdinalIgnoreCase))
+        {
+            docTitleText.Value = $"{docTitleText.Value} (Türkçe)";
+        }
+
         // Her navPoint için src ve text eşitle
         var navPoints = doc.Descendants().Where(e => e.Name.LocalName == "navPoint").ToList();
 
@@ -299,11 +384,15 @@ public static class EpubPackager
             if (string.IsNullOrEmpty(src)) continue;
 
             var (srcFile, anchor) = SplitHref(src);
+            var currentDir = Path.GetDirectoryName(ncxItem.Href)?.Replace('\\', '/') ?? string.Empty;
+            var targetInOpf = string.IsNullOrEmpty(currentDir)
+                ? NormalizeRelativePath(srcFile)
+                : NormalizeRelativePath($"{currentDir}/{srcFile}");
 
-            if (translationMap.TryGetValue(srcFile, out var trFile))
+            if (translationMap.TryGetValue(targetInOpf, out var trFile))
             {
-                // 1. Linki *_tr.html olarak güncelle
-                var newSrc = string.IsNullOrEmpty(anchor) ? trFile : $"{trFile}#{anchor}";
+                // 1. Linki goreli derinligi koruyarak guncelle
+                var newSrc = RewriteHref(src, ncxItem.Href, translationMap);
                 contentEl!.SetAttributeValue("src", newSrc);
 
                 // 2. Başlığı Türkçe dosyadan dinamik çek
@@ -319,7 +408,7 @@ public static class EpubPackager
             }
         }
 
-        return (doc.ToString(), relativePath);
+        return (SerializeXDocument(doc), relativePath);
     }
 
     /// <summary>
@@ -353,19 +442,32 @@ public static class EpubPackager
             if (string.IsNullOrEmpty(href)) continue;
 
             var (srcFile, anchor) = SplitHref(href);
+            var currentDir = Path.GetDirectoryName(navItem.Href)?.Replace('\\', '/') ?? string.Empty;
+            var targetInOpf = string.IsNullOrEmpty(currentDir)
+                ? NormalizeRelativePath(srcFile)
+                : NormalizeRelativePath($"{currentDir}/{srcFile}");
 
-            if (translationMap.TryGetValue(srcFile, out var trFile))
+            if (translationMap.TryGetValue(targetInOpf, out var trFile))
             {
-                var newHref = string.IsNullOrEmpty(anchor) ? trFile : $"{trFile}#{anchor}";
+                // 1. Linki goreli derinligi koruyarak guncelle
+                var newHref = RewriteHref(href, navItem.Href, translationMap);
                 a.SetAttribute("href", newHref);
 
                 var trFullPath = Path.Combine(package.OpfDirectory, trFile);
                 if (File.Exists(trFullPath))
                 {
-                    var updatedTitle = ExtractHeadingFromDocument(trFullPath, anchor, htmlDomCache);
-                    if (!string.IsNullOrWhiteSpace(updatedTitle))
+                    var navParent = a.Closest("nav");
+                    var navType = navParent?.GetAttribute("epub:type") ?? navParent?.GetAttribute("type") ?? "";
+                    var isLandmarkOrPageList = navType.Contains("landmarks", StringComparison.OrdinalIgnoreCase) ||
+                                               navType.Contains("page-list", StringComparison.OrdinalIgnoreCase);
+
+                    if (!isLandmarkOrPageList)
                     {
-                        a.TextContent = updatedTitle;
+                        var updatedTitle = ExtractHeadingFromDocument(trFullPath, anchor, htmlDomCache);
+                        if (!string.IsNullOrWhiteSpace(updatedTitle))
+                        {
+                            a.TextContent = updatedTitle;
+                        }
                     }
                 }
             }
@@ -410,10 +512,35 @@ public static class EpubPackager
                     {
                         return CleanTitle(childHeading.TextContent);
                     }
+
+                    // Boş çapa yanındaki başlık: <a id="..."></a><h2>...</h2>
+                    var nextEl = targetEl.NextElementSibling;
+                    while (nextEl != null)
+                    {
+                        if (Regex.IsMatch(nextEl.TagName, @"^H[1-6]$", RegexOptions.IgnoreCase))
+                        {
+                            return CleanTitle(nextEl.TextContent);
+                        }
+                        if (nextEl.TagName.Equals("p", StringComparison.OrdinalIgnoreCase) ||
+                            nextEl.TagName.Equals("div", StringComparison.OrdinalIgnoreCase))
+                        {
+                            break;
+                        }
+                        nextEl = nextEl.NextElementSibling;
+                    }
+
+                    var parentHeading = targetEl.ParentElement?.QuerySelector("h1, h2, h3, h4, h5, h6");
+                    if (parentHeading != null)
+                    {
+                        return CleanTitle(parentHeading.TextContent);
+                    }
                 }
+
+                // Çapa belirtilmiş ama başlık bulunamadıysa alt başlık etiketini ezmemek için null dön
+                return null;
             }
 
-            // Çapa yoksa belgenin ilk ana başlığını al
+            // Sadece çapa hiç verilmemişse belgenin ilk ana başlığını al
             var topHeading = doc.QuerySelector("h1, h2");
             if (topHeading != null)
             {
@@ -457,11 +584,6 @@ public static class EpubPackager
         sourceStream.CopyTo(entryStream);
     }
 
-    private static string SanitizeFileName(string raw)
-    {
-        return PathSanitizer.SanitizeFileName(raw);
-    }
-
     private static string CleanTitle(string raw)
     {
         return Regex.Replace(raw, @"\s+", " ").Trim();
@@ -471,10 +593,139 @@ public static class EpubPackager
     /// Google Play Books, Apple Books ve W3C EPUB standartlarına uygun katı XHTML/XML
     /// standartlarını (self-closing etiketler, 2.125 HTML5 entity'sinin XML karşılıkları, DOCTYPE) sağlar.
     /// </summary>
-    public static string EnsureValidXhtml(string htmlContent)
+    public static string EnsureValidXhtml(string htmlContent, string targetLanguage = "tr")
+    {
+        return SynchronizeDocument(htmlContent, string.Empty, [], targetLanguage);
+    }
+
+    /// <summary>
+    /// HTML/XHTML belgesini W3C EPUB 3 ve XHTML standartlarına göre senkronize eder:
+    /// 1. Tüm iç a[href] çapraz bağlantılarını çevrilmiş dosya adlarıyla günceller (W3C RSC-007 ve 404 önleme).
+    /// 2. Kök html etiketine lang="tr" ve xml:lang="tr" özniteliklerini enjekte eder; gövdedeki çelişkili yabancı dil etiketlerini temizler.
+    /// 3. StrictXhtmlMarkupFormatter ile katı XML olarak serileştirir.
+    /// </summary>
+    public static string SynchronizeDocument(
+        string htmlContent,
+        string documentHrefInOpf,
+        Dictionary<string, string> translationMap,
+        string targetLanguage = "tr")
     {
         if (string.IsNullOrWhiteSpace(htmlContent)) return htmlContent;
         var doc = Parser.ParseDocument(htmlContent);
-        return doc.ToStrictXhtml();
+
+        // 1. Kök dil öznitelikleri (VoiceOver, heceleme ve sözlük motorları için)
+        var htmlElement = doc.DocumentElement;
+        if (htmlElement != null)
+        {
+            htmlElement.SetAttribute("lang", targetLanguage);
+            htmlElement.SetAttribute("xml:lang", targetLanguage);
+            if (string.IsNullOrEmpty(htmlElement.GetAttribute("xmlns")))
+            {
+                htmlElement.SetAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+            }
+            doc.CleanConflictingLanguageAttributes();
+        }
+
+        // 2. Çapraz bağlantıları (a[href]) güncelle
+        if (translationMap != null && translationMap.Count > 0)
+        {
+            var links = doc.QuerySelectorAll("a[href]");
+            foreach (var link in links)
+            {
+                var href = link.GetAttribute("href");
+                if (!string.IsNullOrWhiteSpace(href))
+                {
+                    var rewritten = RewriteHref(href, documentHrefInOpf, translationMap);
+                    if (rewritten != href)
+                    {
+                        link.SetAttribute("href", rewritten);
+                    }
+                }
+            }
+        }
+
+        return doc.ToStrictXhtml(targetLanguage);
+    }
+
+    /// <summary>
+    /// Bir belgenin içindeki href yolunu çevrilmiş dosya eşleşmelerine göre yeniden yazar.
+    /// Anchor linklerini (#fn1, #sec1) ve göreceli dizin yollarını (../) eksiksiz korur.
+    /// </summary>
+    public static string RewriteHref(
+        string originalHref,
+        string currentDocHref,
+        Dictionary<string, string> translationMap)
+    {
+        if (string.IsNullOrWhiteSpace(originalHref)) return originalHref;
+
+        // Sayfa içi çapa veya harici linkleri atla
+        if (originalHref.StartsWith("#") ||
+            originalHref.Contains("://") ||
+            originalHref.StartsWith("//") ||
+            originalHref.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ||
+            originalHref.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+        {
+            return originalHref;
+        }
+
+        var hashIdx = originalHref.IndexOf('#');
+        var pathPart = hashIdx >= 0 ? originalHref[..hashIdx] : originalHref;
+        var hashPart = hashIdx >= 0 ? originalHref[hashIdx..] : string.Empty;
+
+        if (string.IsNullOrWhiteSpace(pathPart)) return originalHref;
+
+        var currentDir = Path.GetDirectoryName(currentDocHref)?.Replace('\\', '/') ?? string.Empty;
+
+        // 1. Hedef dosyanın OpfDirectory'ye göre normalize edilmiş yolunu bul
+        string targetInOpf = string.IsNullOrEmpty(currentDir)
+            ? NormalizeRelativePath(pathPart)
+            : NormalizeRelativePath($"{currentDir}/{pathPart}");
+
+        // 2. translationMap'te birebir eşleşme var mı?
+        if (translationMap.TryGetValue(targetInOpf, out var translatedTargetInOpf))
+        {
+            string newRelativePath = string.IsNullOrEmpty(currentDir)
+                ? translatedTargetInOpf
+                : Path.GetRelativePath(currentDir, translatedTargetInOpf).Replace('\\', '/');
+
+            return $"{newRelativePath}{hashPart}";
+        }
+
+        // 3. Dosya adı bazında eşleşme (klasör prefiksi farklıysa fallback)
+        var targetFileName = Path.GetFileName(pathPart);
+        foreach (var (origKey, trVal) in translationMap)
+        {
+            if (Path.GetFileName(origKey).Equals(targetFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                var trFileName = Path.GetFileName(trVal);
+                var targetDir = Path.GetDirectoryName(pathPart)?.Replace('\\', '/') ?? string.Empty;
+                var newPath = string.IsNullOrEmpty(targetDir) ? trFileName : $"{targetDir}/{trFileName}";
+                return $"{newPath}{hashPart}";
+            }
+        }
+
+        return originalHref;
+    }
+
+    private static string NormalizeRelativePath(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var stack = new List<string>();
+        foreach (var part in parts)
+        {
+            if (part == ".") continue;
+            if (part == "..")
+            {
+                if (stack.Count > 0 && stack[^1] != "..")
+                    stack.RemoveAt(stack.Count - 1);
+                else
+                    stack.Add(part);
+            }
+            else
+            {
+                stack.Add(part);
+            }
+        }
+        return string.Join('/', stack);
     }
 }

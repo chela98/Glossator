@@ -15,7 +15,9 @@ namespace Glossator.Core.Models.Epub
         /// Bu öğenin çevrilebilir bir HTML/XHTML metin belgesi olup olmadığını belirtir.
         /// </summary>
         public bool IsDocument =>
-            MediaType == "application/xhtml+html" ||
+            MediaType.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase) ||
+            MediaType.Equals("text/html", StringComparison.OrdinalIgnoreCase) ||
+            Href.EndsWith(".htm", StringComparison.OrdinalIgnoreCase) ||
             Href.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
             Href.EndsWith(".xhtml", StringComparison.OrdinalIgnoreCase);
 

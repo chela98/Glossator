@@ -1,13 +1,15 @@
 using System.Collections.Concurrent;
 using Glossator.AI.Extensions;
 using Glossator.AI.Workflows;
-using Glossator.Core.Glossary;
+using Glossator.Core.Data;
 using Glossator.Core.Models.Checkpoint;
 using Glossator.Core.Models.Epub;
 using Glossator.Core.Packaging;
 using Glossator.Core.Parsing;
 using Glossator.Core.Rules;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Spectre.Console;
 
 namespace Glossator.Cli.Orchestration;
@@ -17,8 +19,11 @@ namespace Glossator.Cli.Orchestration;
 /// Parallel.ForEachAsync ve izole IServiceScope mekanizmasıyla race condition'ları önler,
 /// Spectre.Console canlı ilerleme çubuğuyla durumu raporlar.
 /// </summary>
-public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvider)
+public sealed class ParallelLocalizationEngine(
+    IServiceProvider rootServiceProvider,
+    ILogger<ParallelLocalizationEngine>? logger = null)
 {
+    private readonly ILogger<ParallelLocalizationEngine> _logger = logger ?? NullLogger<ParallelLocalizationEngine>.Instance;
     public async Task RunAsync(
         EpubPackage package,
         List<EpubItem> selectedChapters,
@@ -42,6 +47,9 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
             CancellationToken = cancellationToken
         };
 
+        _logger.LogInformation("Starting ParallelLocalizationEngine with {ChapterCount} chapters (Concurrency={Concurrency}, Fresh={IsFresh}, TestMode={IsTestMode})",
+            selectedChapters.Count, concurrency, isFresh, isTestMode);
+
         await AnsiConsole.Progress()
             .AutoRefresh(true)
             .AutoClear(false)
@@ -61,28 +69,38 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
 
                 await Parallel.ForEachAsync(selectedChapters, parallelOptions, async (chapterItem, ct) =>
                 {
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.ActiveWorkersCounter.Add(1);
                     var chapterFullPath = Path.Combine(package.OpfDirectory, chapterItem.Href);
+                    var chapterDir = Path.GetDirectoryName(chapterFullPath) ?? package.OpfDirectory;
                     var chapterFileName = Path.GetFileName(chapterFullPath);
                     var chapterKey = Path.GetFileNameWithoutExtension(chapterFileName);
-                    var outputFilePath = Path.Combine(package.OpfDirectory, $"{chapterKey}_tr.html");
+                    var ext = Path.GetExtension(chapterFileName);
+                    if (string.IsNullOrWhiteSpace(ext)) ext = ".html";
+                    var outputFilePath = Path.Combine(chapterDir, $"{chapterKey}_tr{ext}");
+                    var bookId = package.Title.Trim();
+
+                    _logger.LogInformation("Worker picked up chapter '{Chapter}'", chapterFileName);
 
                     // Bölüme özel UI İlerleme Görevi
                     var task = ctx.AddTask($"[green]{Markup.Escape(chapterFileName)}[/] (Başlatılıyor...)", maxValue: 100);
                     activeTasks[chapterFileName] = task;
 
+                    try
+                    {
+
                     // 1. Her bölüm için izole DI Kapsamı (IServiceScope)
                     await using var scope = rootServiceProvider.CreateAsyncScope();
-                    var repo = scope.ServiceProvider.GetRequiredService<SqliteGlossaryRepository>();
-                    var queue = scope.ServiceProvider.GetRequiredService<ICheckpointQueue>();
+                    var checkpointStore = scope.ServiceProvider.GetRequiredService<CheckpointStore>();
                     var tracker = scope.ServiceProvider.GetRequiredService<TermUsageTracker>();
                     tracker.BeginNewScope(chapterFileName);
 
                     var pipeline = await scope.ServiceProvider.CreateBookLocalizationPipelineAsync(ct);
 
-                    // Bölüm olaylarını alt task açıklamasına yansıt
+                    // Bölüm olaylarını alt task açıklamasına yansıt (Terminal genişliğini aşmayacak şekilde güvenli özet)
                     pipeline.StepProgress += log =>
                     {
-                        task.Description = $"[yellow]{Markup.Escape(chapterFileName)}[/] | [dim]{Markup.Escape(log.Stage)}[/] {Markup.Escape(log.Summary)}";
+                        var shortSummary = log.Summary.Length > 55 ? log.Summary[..52] + "..." : log.Summary;
+                        task.Description = $"[yellow]{Markup.Escape(chapterFileName)}[/] | [dim]{Markup.Escape(log.Stage)}[/] {Markup.Escape(shortSummary)}";
                     };
 
                     // 2. Belge Segmentasyonu ve Gruplama
@@ -97,10 +115,36 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
 
                     if (isFresh)
                     {
-                        await repo.ClearCheckpointsAsync(chapterFileName, ct);
+                        await checkpointStore.ClearCheckpointsAsync(bookId, chapterFileName, ct);
+                        var oldDone = outputFilePath + ".done";
+                        if (File.Exists(oldDone)) { try { File.Delete(oldDone); } catch { } }
+                        var oldPart = outputFilePath + ".part";
+                        if (File.Exists(oldPart)) { try { File.Delete(oldPart); } catch { } }
                     }
 
-                    var existingCheckpoints = await repo.GetCompletedCheckpointsAsync(chapterFileName, ct);
+                    var existingCheckpoints = await checkpointStore.GetCompletedCheckpointsAsync(bookId, chapterFileName, ct);
+
+                    // 2.1. Önceden tamamlanmış checkpoint'leri hemen DOM'a ve diske uygula (canlı izleme)
+                    if (!isFresh && existingCheckpoints.Count > 0)
+                    {
+                        var hasCachedSegments = false;
+                        foreach (var seg in segments)
+                        {
+                            if (existingCheckpoints.TryGetValue(seg.Index, out var cp) &&
+                                cp.OriginalHash == SegmentCheckpoint.ComputeHash(seg.MaskedText) &&
+                                !string.IsNullOrWhiteSpace(cp.TranslatedText))
+                            {
+                                seg.TranslatedText = cp.TranslatedText;
+                                hasCachedSegments = true;
+                            }
+                        }
+
+                        if (hasCachedSegments)
+                        {
+                            HtmlSegmenter.ApplyTranslations(segments);
+                            await File.WriteAllTextAsync(outputFilePath + ".part", document.ToStrictXhtml(), ct);
+                        }
+                    }
 
                     // 3. Style Guide Çözümleme
                     string chapterStyleGuide;
@@ -126,11 +170,12 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
                         var sample = string.Join("\n\n---\n\n", sampleParagraphs);
                         chapterStyleGuide = await pipeline.AnalyzeStyleAsync(sample, ct);
 
-                        await queue.EnqueueAsync(new SegmentCheckpoint
+                        await checkpointStore.EnqueueAsync(new SegmentCheckpoint
                         {
+                            BookId = bookId,
                             ChapterFile = chapterFileName,
                             SegmentIndex = -1,
-                            OriginalHash = SqliteGlossaryRepository.ComputeHash(sample),
+                            OriginalHash = SegmentCheckpoint.ComputeHash(sample),
                             TagName = "styleguide",
                             OriginalText = "StyleGuide",
                             TranslatedText = chapterStyleGuide,
@@ -147,7 +192,7 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
 
                         bool allCached = sec.Segments.All(seg =>
                             existingCheckpoints.TryGetValue(seg.Index, out var cp) &&
-                            cp.OriginalHash == SqliteGlossaryRepository.ComputeHash(seg.MaskedText) &&
+                            cp.OriginalHash == SegmentCheckpoint.ComputeHash(seg.MaskedText) &&
                             !string.IsNullOrWhiteSpace(cp.TranslatedText));
 
                         if (allCached)
@@ -160,18 +205,23 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
                         }
                         else
                         {
-                            task.Description = $"[blue]{Markup.Escape(chapterFileName)}[/] | Sec {s + 1}/{targetSections.Count}: {Markup.Escape(sec.Title)}";
+                            var shortTitle = sec.Title.Length > 45 ? sec.Title[..42] + "..." : sec.Title;
+                            task.Description = $"[blue]{Markup.Escape(chapterFileName)}[/] | Sec {s + 1}/{targetSections.Count}: {Markup.Escape(shortTitle)}";
                             await pipeline.TranslateSectionAsync(sec, chapterStyleGuide, ct);
 
                             // Segmentleri kuyruk üzerinden arka plan SQLite yazıcısına aktar
                             foreach (var seg in sec.Segments)
                             {
-                                var isTranslated = !string.IsNullOrWhiteSpace(seg.TranslatedText);
-                                await queue.EnqueueAsync(new SegmentCheckpoint
+                                var isTranslated = !string.IsNullOrWhiteSpace(seg.TranslatedText) &&
+                                                   (seg.IsPureTechnicalOrPlaceholder() ||
+                                                    !string.Equals(seg.TranslatedText.Trim(), seg.MaskedText.Trim(), StringComparison.OrdinalIgnoreCase));
+
+                                await checkpointStore.EnqueueAsync(new SegmentCheckpoint
                                 {
+                                    BookId = bookId,
                                     ChapterFile = chapterFileName,
                                     SegmentIndex = seg.Index,
-                                    OriginalHash = SqliteGlossaryRepository.ComputeHash(seg.MaskedText),
+                                    OriginalHash = SegmentCheckpoint.ComputeHash(seg.MaskedText),
                                     TagName = seg.TagName,
                                     OriginalText = seg.MaskedText,
                                     TranslatedText = isTranslated ? seg.TranslatedText! : seg.MaskedText,
@@ -179,11 +229,11 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
                                     UpdatedAt = DateTime.UtcNow
                                 }, ct);
                             }
-                        }
 
-                        // Katı W3C XHTML olarak ara kaydet
-                        HtmlSegmenter.ApplyTranslations(segments);
-                        await File.WriteAllTextAsync(outputFilePath, document.ToStrictXhtml(), ct);
+                            // Canlı Takip: Bölüm henüz bitmedi; ara çıktıyı .part dosyasına yaz (kullanıcı canlı izleyebilsin fakat yarım dosya tamamlandı sayılmasın)
+                            HtmlSegmenter.ApplyTranslations(segments);
+                            await File.WriteAllTextAsync(outputFilePath + ".part", document.ToStrictXhtml(), ct);
+                        }
 
                         task.Increment(1);
                     }
@@ -192,9 +242,63 @@ public sealed class ParallelLocalizationEngine(IServiceProvider rootServiceProvi
                     HtmlSegmenter.ApplyTranslations(segments);
                     await File.WriteAllTextAsync(outputFilePath, document.ToStrictXhtml(), ct);
 
-                    task.Description = $"[bold green]✔ {Markup.Escape(chapterFileName)} Tamamlandı[/]";
+                    // KONTROL: Bölümdeki tüm segmentler eksiksiz çevrildi mi? (İngilizce kalan veya boş olan var mı?)
+                    // Saf yer tutucu/teknik bloklarda Translated == Masked olması normaldir; doğal dil içeren bloklar denetlenir.
+                    var untranslatedCount = segments.Count(s =>
+                        string.IsNullOrWhiteSpace(s.TranslatedText) ||
+                        (!s.IsPureTechnicalOrPlaceholder() &&
+                         string.Equals(s.TranslatedText.Trim(), s.MaskedText.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+                    if (untranslatedCount == 0)
+                    {
+                        // Kuyruktaki tüm checkpoint kayıtlarının SQLite'a yazıldığını garanti et
+                        await checkpointStore.FlushAsync(ct);
+
+                        // Tamamlanma onay dosyası oluştur ve ara .part dosyasını temizle
+                        var doneFilePath = outputFilePath + ".done";
+                        await File.WriteAllTextAsync(doneFilePath, DateTime.UtcNow.ToString("o"), ct);
+
+                        var partFilePath = outputFilePath + ".part";
+                        if (File.Exists(partFilePath))
+                        {
+                            try { File.Delete(partFilePath); } catch { /* best-effort cleanup */ }
+                        }
+
+                        Glossator.AI.Diagnostics.GlossatorDiagnostics.ChaptersTranslatedCounter.Add(1);
+                        _logger.LogInformation("OK: Chapter '{Chapter}' completed successfully ({SectionCount} sections).",
+                            chapterFileName, targetSections.Count);
+
+                        task.Description = $"[bold green]OK: {Markup.Escape(chapterFileName)} Tamamlandı[/]";
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Bölüm '{Chapter}' kısmi çevrildi ({Count} segment eksik veya İngilizce kaldı). .done onayı verilmedi; sonraki çalıştırmada kaldığı yerden devam edilecek.",
+                            chapterFileName, untranslatedCount);
+
+                        task.Description = $"[bold yellow]UYARI: {Markup.Escape(chapterFileName)} ({untranslatedCount} blok eksik - .part korundu)[/]";
+                    }
+
                     task.Value = task.MaxValue;
-                    mainProgress.Increment(1);
+                    lock (activeTasks)
+                    {
+                        mainProgress.Increment(1);
+                    }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        task.Description = $"[bold red]İPTAL: {Markup.Escape(chapterFileName)}[/]";
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Worker failed on chapter '{Chapter}'", chapterFileName);
+                        task.Description = $"[bold red]HATA: {Markup.Escape(chapterFileName)}: {Markup.Escape(ex.Message)}[/]";
+                        throw;
+                    }
+                    finally
+                    {
+                        Glossator.AI.Diagnostics.GlossatorDiagnostics.ActiveWorkersCounter.Add(-1);
+                    }
                 });
             });
     }

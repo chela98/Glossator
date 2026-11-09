@@ -65,7 +65,7 @@ public sealed class GlossaryExportCommand(SqliteGlossaryRepository repository, I
                     $"[bold white]Aktarılan Terim Sayısı:[/] [green]{terms.Count}[/]\n" +
                     $"[bold white]Dosya Boyutu:[/] [green]{fileInfo.Length / 1024.0:F1} KB[/]"
                 ))
-                .Header("[bold green]✔ Git-Dostu Sözlük Dosyası Başarıyla Dışa Aktarıldı[/]")
+                .Header("[bold green]OK: Git-Dostu Sözlük Dosyası Başarıyla Dışa Aktarıldı[/]")
                 .BorderColor(Color.Green);
 
             AnsiConsole.Write(panel);

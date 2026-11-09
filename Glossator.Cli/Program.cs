@@ -15,18 +15,25 @@ using Glossator.Core.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using OpenTelemetry;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
-// 0. Eğer 'glossary' alt komutu veya '--help / -h' çağrıldıysa Spectre.Console.Cli motorunu çalıştır
+// UTF-8 Konsol Desteği (Windows conhost / Terminal karakter desteği)
+Console.OutputEncoding = System.Text.Encoding.UTF8;
+Console.InputEncoding = System.Text.Encoding.UTF8;
+
+// 0. Eğer 'glossary' alt komutu çağrıldıysa Spectre.Console.Cli motorunu çalıştır
 if (args.Length > 0 && args[0].Equals("glossary", StringComparison.OrdinalIgnoreCase))
 {
     var glossaryServices = new ServiceCollection();
-    var defaultDbPath = Path.Combine(Environment.CurrentDirectory, "glossator.db");
+    var defaultDbPath = GlossatorPaths.GetMasterDatabasePath();
     var defaultConnFactory = new SqliteConnectionFactory(defaultDbPath);
     glossaryServices.AddSingleton<ISqliteConnectionFactory>(defaultConnFactory);
     glossaryServices.AddSingleton(new SqliteGlossaryRepository(defaultConnFactory));
@@ -83,157 +90,142 @@ AnsiConsole.Write(
 
 AnsiConsole.MarkupLine("[bold cyan]Microsoft Agent Framework (.NET 10) Tabanlı Kitap Yerelleştirme Boru Hattı[/]\n");
 
-// 0. İnteraktif Ana Menü (Uygulama argümansız başlatıldığında)
-if (args.Length == 0 && !Console.IsInputRedirected)
-{
-    var mainChoice = AnsiConsole.Prompt(
-        new SelectionPrompt<string>()
-            .Title("[bold green]Lütfen yapmak istediğiniz işlemi seçin:[/]")
-            .PageSize(10)
-            .AddChoices(
-                "🚀 1. Kitap Yerelleştirme / Çeviri Boru Hattı",
-                "📚 2. Sözlük ve Terim Yönetim Merkezi (TUI Hub)",
-                "📦 3. EPUB Paketleme Motoru",
-                "🚪 0. Çıkış"));
-
-    if (mainChoice.StartsWith("🚪") || mainChoice.StartsWith("0"))
-    {
-        return 0;
-    }
-
-    if (mainChoice.StartsWith("📚") || mainChoice.StartsWith("2"))
-    {
-        var defaultDb = Path.Combine(Environment.CurrentDirectory, "glossator.db");
-        var hubConnFactory = new SqliteConnectionFactory(defaultDb);
-        var hubRepo = new SqliteGlossaryRepository(hubConnFactory);
-        var hubSerialization = new GlossarySerializationService();
-        await GlossaryInteractiveHub.RunAsync(hubRepo, hubSerialization);
-
-        var continueWithTranslation = AnsiConsole.Confirm("\n[bold yellow]Sözlük yönetiminden sonra kitap çeviri işlemine geçmek ister misiniz?[/]", defaultValue: false);
-        if (!continueWithTranslation)
-        {
-            return 0;
-        }
-    }
-    else if (mainChoice.StartsWith("📦") || mainChoice.StartsWith("3"))
-    {
-        var targetBook = ResolveBookPath(null);
-        if (!string.IsNullOrWhiteSpace(targetBook) && (Directory.Exists(targetBook) || File.Exists(targetBook)))
-        {
-            var epubPackage = EpubManifestReader.Read(targetBook);
-            RunPackaging(epubPackage);
-        }
-        return 0;
-    }
-}
-
-// 1. Dinamik Kitap Yolu ve CLI Parametreleri
-string? pathArg = null;
-string? explicitOutputPath = null;
-var isFresh = false;
-var isTestMode = false;
-int? requestedSectionCount = null;
-int concurrency = 3;
-bool hasExplicitConcurrency = false;
-
-for (int i = 0; i < args.Length; i++)
-{
-    var arg = args[i];
-    if (arg.StartsWith("-"))
-    {
-        if ((arg.Equals("--concurrency", StringComparison.OrdinalIgnoreCase) ||
-             arg.Equals("-j", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
-        {
-            hasExplicitConcurrency = true;
-            if (int.TryParse(args[++i], out var parsedConcurrency))
-            {
-                concurrency = Math.Clamp(parsedConcurrency, 1, Environment.ProcessorCount * 2);
-            }
-            continue;
-        }
-
-        if ((arg.Equals("--output", StringComparison.OrdinalIgnoreCase) ||
-             arg.Equals("-o", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
-        {
-            explicitOutputPath = args[++i].Trim('"', '\'');
-            continue;
-        }
-
-        if ((arg.Equals("--input", StringComparison.OrdinalIgnoreCase) ||
-             arg.Equals("-i", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
-        {
-            pathArg = args[++i].Trim('"', '\'');
-            continue;
-        }
-
-        if ((arg.Equals("--count", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
-        {
-            if (int.TryParse(args[++i], out var count))
-            {
-                requestedSectionCount = count;
-            }
-            continue;
-        }
-
-        if (arg.Equals("--fresh", StringComparison.OrdinalIgnoreCase))
-        {
-            isFresh = true;
-            continue;
-        }
-
-        if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
-        {
-            isTestMode = true;
-            continue;
-        }
-    }
-    else if (pathArg == null)
-    {
-        pathArg = arg.Trim('"', '\'');
-    }
-}
-
-string bookPath = ResolveBookPath(pathArg);
-
-if (string.IsNullOrWhiteSpace(bookPath) || (!Directory.Exists(bookPath) && !File.Exists(bookPath)))
-{
-    AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Geçerli bir kitap yolu belirtilmedi veya bulunamadı: [dim]{bookPath}[/]");
-    AnsiConsole.MarkupLine("[yellow]Kullanım:[/] glossator <kitap-klasörü-veya-.epub> [-o çıktı.epub] [--fresh] [--test]");
-    return 1;
-}
-
-// 2. Graceful Shutdown & Cancellation Yönetimi (Ctrl+C / SIGINT)
+// Graceful Shutdown & Cancellation Yönetimi (Ctrl+C / SIGINT)
 using var cts = new CancellationTokenSource();
+CancellationTokenSource? currentRunCts = null;
+
 Console.CancelKeyPress += (sender, eventArgs) =>
 {
     eventArgs.Cancel = true;
-    AnsiConsole.MarkupLine("\n[bold yellow]⚠ İptal sinyali (Ctrl+C) alındı. Devam eden istekler güvenle sonlandırılıyor...[/]");
-    cts.Cancel();
+    if (currentRunCts != null && !currentRunCts.IsCancellationRequested)
+    {
+        AnsiConsole.MarkupLine("\n[bold yellow]İptal:[/] Devam eden çeviri işlemi durduruluyor...");
+        currentRunCts.Cancel();
+    }
+    else
+    {
+        AnsiConsole.MarkupLine("\n[bold yellow]Çıkış:[/] Uygulama kapatılıyor...");
+        cts.Cancel();
+    }
 };
 
 try
 {
-    // 3. EPUB Paketini Oku & Bilgileri Göster
-    var package = EpubManifestReader.Read(bookPath);
+    // 1. Dinamik Kitap Yolu ve CLI Parametreleri Ayrıştırma
+    string? pathArg = null;
+    string? explicitOutputPath = null;
+    var isFresh = false;
+    var isTestMode = false;
+    int? requestedSectionCount = null;
+    int concurrency = 3;
+    var autoExtractTerms = false;
 
-    var summaryTable = new Table().Border(TableBorder.Rounded);
-    summaryTable.AddColumn("[bold]Özellik[/]");
-    summaryTable.AddColumn("[bold]Değer[/]");
-    summaryTable.AddRow("Kitap Başlığı", $"[cyan]{Markup.Escape(package.Title)}[/]");
-    summaryTable.AddRow("Yazar", $"[green]{Markup.Escape(package.Author ?? "Bilinmiyor")}[/]");
-    summaryTable.AddRow("Bölüm Sayısı (Spine)", $"{package.Spine.Count} bölüm");
-    summaryTable.AddRow("Sözlük (Glossary)", package.GlossaryItem != null ? $"[green]✔ {package.GlossaryItem.Href}[/]" : "[dim]Yok[/]");
-    summaryTable.AddRow("Dizin (Index)", package.IndexItem != null ? $"[green]✔ {package.IndexItem.Href}[/]" : "[dim]Yok[/]");
-    summaryTable.AddRow("Eşzamanlılık (Worker)", hasExplicitConcurrency ? $"[yellow]{concurrency}[/] paralel iş parçacığı" : "[dim]Bölüm seçiminde belirlenecek[/]");
-    AnsiConsole.Write(summaryTable);
+    for (int i = 0; i < args.Length; i++)
+    {
+        var arg = args[i];
+        if (arg.StartsWith("-"))
+        {
+            if ((arg.Equals("--concurrency", StringComparison.OrdinalIgnoreCase) ||
+                 arg.Equals("-j", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[++i], out var parsedConcurrency))
+                {
+                    concurrency = Math.Clamp(parsedConcurrency, 1, Environment.ProcessorCount * 2);
+                }
+                continue;
+            }
+
+            if ((arg.Equals("--output", StringComparison.OrdinalIgnoreCase) ||
+                 arg.Equals("-o", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+            {
+                explicitOutputPath = args[++i].Trim('"', '\'');
+                continue;
+            }
+
+            if ((arg.Equals("--input", StringComparison.OrdinalIgnoreCase) ||
+                 arg.Equals("-i", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+            {
+                pathArg = args[++i].Trim('"', '\'');
+                continue;
+            }
+
+            if ((arg.Equals("--count", StringComparison.OrdinalIgnoreCase)) && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[++i], out var count))
+                {
+                    requestedSectionCount = count;
+                }
+                continue;
+            }
+
+            if (arg.Equals("--fresh", StringComparison.OrdinalIgnoreCase))
+            {
+                isFresh = true;
+                continue;
+            }
+
+            if (arg.Equals("--test", StringComparison.OrdinalIgnoreCase))
+            {
+                isTestMode = true;
+                continue;
+            }
+
+            if (arg.Equals("--extract-terms", StringComparison.OrdinalIgnoreCase) ||
+                arg.Equals("--auto-extract", StringComparison.OrdinalIgnoreCase))
+            {
+                autoExtractTerms = true;
+                continue;
+            }
+        }
+        else if (pathArg == null)
+        {
+            pathArg = arg.Trim('"', '\'');
+        }
+    }
+
+    // 2. Kütüphane / Son Açılan Kitaplar Yöneticisi ile Kitap Yolunu Çöz
+    var recentBooks = await RecentBooksManager.LoadRecentBooksAsync(cts.Token);
+    string bookPath;
+
+    if (!string.IsNullOrWhiteSpace(pathArg))
+    {
+        bookPath = pathArg;
+    }
+    else if (recentBooks.Count > 0 && (Directory.Exists(recentBooks[0].Path) || File.Exists(recentBooks[0].Path)))
+    {
+        bookPath = recentBooks[0].Path;
+    }
+    else
+    {
+        bookPath = ResolveBookPath(null);
+    }
+
+    if (string.IsNullOrWhiteSpace(bookPath) || (!Directory.Exists(bookPath) && !File.Exists(bookPath)))
+    {
+        AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Geçerli bir kitap yolu belirtilmedi veya bulunamadı: [dim]{Markup.Escape(bookPath ?? "")}[/]");
+        AnsiConsole.MarkupLine("[yellow]Kullanım:[/] glossator <kitap-klasörü-veya-.epub> [[-o çıktı.epub]] [[--fresh]] [[--test]]");
+        return 1;
+    }
+
+    // 3. EPUB Paketini Yükle ve Kütüphaneye Kaydet
+    var package = EpubManifestReader.Read(bookPath);
+    var activeBookEntry = await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
 
     // 4. Modern .NET 10 HostApplicationBuilder ve DI Altyapısı
+    var userSettingsPath = GlossatorPaths.GetUserSettingsPath();
     var hostBuilder = Host.CreateApplicationBuilder(args);
     hostBuilder.Configuration
-        .SetBasePath(AppContext.BaseDirectory)
+        .SetBasePath(AppContext.BaseDirectory);
+
+    if (hostBuilder.Environment.IsDevelopment())
+    {
+        hostBuilder.Configuration.AddUserSecrets<Program>(optional: true);
+    }
+
+    hostBuilder.Configuration
         .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
         .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: false)
-        .AddUserSecrets<Program>(optional: true)
+        .AddJsonFile(userSettingsPath, optional: true, reloadOnChange: false)
         .AddEnvironmentVariables();
 
     var config = hostBuilder.Configuration;
@@ -245,93 +237,182 @@ try
     var otelEndpoint = config["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
     var serviceName = config["OpenTelemetry:ServiceName"] ?? "Glossator.Cli";
 
-    using var tracerProvider = Sdk.CreateTracerProviderBuilder()
-        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName))
-        .AddSource(Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName)
-        .AddSource("Microsoft.Agents.*")
-        .AddSource("Microsoft.Agents.AI.Workflows*")
-        .AddSource("Experimental.Microsoft.Extensions.AI*")
-        .AddHttpClientInstrumentation()
-        .AddOtlpExporter(opt =>
+    // 1. ILogger -> OpenTelemetry Logging Entegrasyonu (Aspire Dashboard "Structured Logs" Canlı Akışı)
+    hostBuilder.Logging.ClearProviders(); // TUI konsol ekranının bozulmaması için ham konsol loglarını temizle
+    hostBuilder.Logging.AddOpenTelemetry(logging =>
+    {
+        logging.IncludeFormattedMessage = true;
+        logging.IncludeScopes = true;
+        logging.SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName));
+        logging.AddOtlpExporter(opt =>
         {
             opt.Endpoint = new Uri(otelEndpoint);
             opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
-        })
-        .Build();
+        });
+    });
 
-    using var meterProvider = Sdk.CreateMeterProviderBuilder()
-        .SetResourceBuilder(ResourceBuilder.CreateDefault().AddService(serviceName))
-        .AddMeter(Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName)
-        .AddMeter("Microsoft.Agents.*")
-        .AddMeter("Microsoft.Agents.AI.Workflows*")
-        .AddMeter("Experimental.Microsoft.Extensions.AI*")
-        .AddHttpClientInstrumentation()
-        .AddOtlpExporter(opt =>
-        {
-            opt.Endpoint = new Uri(otelEndpoint);
-            opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
-        })
-        .Build();
-
-    AnsiConsole.MarkupLine($"[cyan]📡 OpenTelemetry Aktif:[/] OTLP Hedefi: [dim]{otelEndpoint}[/] (Aspire Dashboard: http://localhost:18888)");
+    // 2. OpenTelemetry Tracing & Metrics (DI Host Entegrasyonu)
+    hostBuilder.Services.AddOpenTelemetry()
+        .ConfigureResource(resource => resource.AddService(serviceName))
+        .WithTracing(tracing => tracing
+            .AddSource(Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName)
+            .AddSource("Microsoft.Agents.*")
+            .AddSource("Microsoft.Agents.AI.Workflows*")
+            .AddSource("Experimental.Microsoft.Extensions.AI*")
+            .AddHttpClientInstrumentation()
+            .AddOtlpExporter(opt =>
+            {
+                opt.Endpoint = new Uri(otelEndpoint);
+                opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+            }))
+        .WithMetrics(metrics => metrics
+            .AddMeter(Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName)
+            .AddMeter("Microsoft.Agents.*")
+            .AddMeter("Microsoft.Agents.AI.Workflows*")
+            .AddMeter("Experimental.Microsoft.Extensions.AI*")
+            .AddHttpClientInstrumentation()
+            .AddOtlpExporter(opt =>
+            {
+                opt.Endpoint = new Uri(otelEndpoint);
+                opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+            }));
 
     // API Yapılandırması ve Güvenlik Denetimi
     var aiSection = config.GetSection("GlossatorAi");
     var aiOptions = aiSection.Get<GlossatorAiOptions>() ?? new GlossatorAiOptions();
 
-    foreach (var (providerName, providerConfig) in aiOptions.Providers)
+    // Sadece aktif olarak görev alan ajanların (StyleAnalyst, Translator, Reviewer) fiilen çözümlediği sağlayıcıları denetle
+    var activeProviders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var agentRoles = new[]
     {
-        if (string.IsNullOrWhiteSpace(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("YOUR_"))
+        Glossator.AI.Extensions.AiServiceExtensions.KeyStyleAnalyst,
+        Glossator.AI.Extensions.AiServiceExtensions.KeyTranslator,
+        Glossator.AI.Extensions.AiServiceExtensions.KeyReviewer
+    };
+
+    foreach (var role in agentRoles)
+    {
+        var (providerName, _, _) = aiOptions.ResolveAgent(role);
+        if (!string.IsNullOrWhiteSpace(providerName))
         {
-            if (!Console.IsInputRedirected)
+            activeProviders.Add(providerName);
+        }
+    }
+
+    foreach (var providerName in activeProviders)
+    {
+        if (aiOptions.Providers.TryGetValue(providerName, out var providerConfig))
+        {
+            // Localhost / 127.0.0.1 (Ollama, LM Studio vb.) için API Key zorunlu değildir
+            bool isLocal = providerConfig.Endpoint.Contains("localhost") || providerConfig.Endpoint.Contains("127.0.0.1");
+
+            if (!isLocal && (string.IsNullOrWhiteSpace(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("YOUR_")))
             {
-                AnsiConsole.MarkupLine($"\n[bold yellow]⚠ '{providerName}' için API Key bulunamadı veya yer tutucu durumunda.[/]");
-                providerConfig.ApiKey = AnsiConsole.Prompt(
-                    new TextPrompt<string>($"[green]Lütfen {providerName} API Anahtarınızı girin:[/] ")
-                        .Secret());
+                if (!Console.IsInputRedirected)
+                {
+                    AnsiConsole.MarkupLine($"\n[bold yellow]Uyarı:[/] Aktif sağlayıcı '[cyan]{Markup.Escape(providerName)}[/]' için API Key bulunamadı veya yer tutucu durumunda.");
+                    var enteredKey = AnsiConsole.Prompt(
+                        new TextPrompt<string>($"[green]Lütfen {Markup.Escape(providerName)} API Anahtarınızı girin:[/] ")
+                            .Secret());
+
+                    if (!string.IsNullOrWhiteSpace(enteredKey))
+                    {
+                        providerConfig.ApiKey = enteredKey.Trim();
+                        var shouldSave = AnsiConsole.Confirm($"[dim]Bu anahtarı bir sonraki çalıştırmalar için kullanıcı profiline (~/.glossator/user_settings.json) kaydetmek ister misiniz?[/]", defaultValue: true);
+                        if (shouldSave)
+                        {
+                            await TrySaveApiKeyToUserSettingsAsync(providerName, providerConfig.ApiKey);
+                        }
+                    }
+                }
             }
         }
     }
 
-    // SQLite Veri Tabanı ve Sözlük Başlatma
-    var dbPath = Path.Combine(Environment.CurrentDirectory, "glossator.db");
+    // Merkezi SQLite Veri Tabanı ve Sözlük Başlatma (~/.glossator/glossator.db)
+    var dbPath = GlossatorPaths.GetMasterDatabasePath();
     var connectionFactory = new SqliteConnectionFactory(dbPath);
     var repo = new SqliteGlossaryRepository(connectionFactory);
+    var serializationService = new GlossarySerializationService();
 
-    var glossaryTerms = EpubGlossaryReader.Read(package);
-    var indexTerms = EpubIndexReader.Read(package);
-    AnsiConsole.MarkupLine($"\n[yellow]EPUB Kaynaklarından Çıkarılan Terimler:[/] Sözlük: [green]{glossaryTerms.Count}[/] | Dizin: [green]{indexTerms.Count}[/]");
+    // 1. Merkezi Master YAML ve Kitap Düzeyi Sözlük Senkronizasyonu (Master SSOT)
+    var masterYamlPath = GlossatorPaths.GetMasterGlossaryYamlPath();
+    // Kitabın fiziksel konumunu belirle (.epub arşiviyse bulunduğu gerçek dizin, klasörse kendisi)
+    var physicalBookDir = !string.IsNullOrWhiteSpace(package.SourceArchivePath) && File.Exists(package.SourceArchivePath)
+        ? (Path.GetDirectoryName(Path.GetFullPath(package.SourceArchivePath)) ?? Environment.CurrentDirectory)
+        : (!string.IsNullOrWhiteSpace(bookPath) && File.Exists(bookPath)
+            ? (Path.GetDirectoryName(Path.GetFullPath(bookPath)) ?? Environment.CurrentDirectory)
+            : (!string.IsNullOrWhiteSpace(package.RootDirectory) ? package.RootDirectory : Environment.CurrentDirectory));
 
-    await repo.ImportTermsAsync(glossaryTerms, package.Title, cts.Token);
-    await repo.ImportTermsAsync(indexTerms, package.Title, cts.Token);
-    await repo.SeedDefaultTurkishTranslationsAsync(cts.Token);
+    // Öncelik: Gerçek kitap klasöründeki glossary.yaml / glossary.json -> Temp içindeki paket kökü
+    var candidatePhysicalYaml = Path.Combine(physicalBookDir, "glossary.yaml");
+    var candidatePhysicalJson = Path.Combine(physicalBookDir, "glossary.json");
+    var candidateTempYaml = !string.IsNullOrWhiteSpace(package.RootDirectory) ? Path.Combine(package.RootDirectory, "glossary.yaml") : null;
+    var candidateTempJson = !string.IsNullOrWhiteSpace(package.RootDirectory) ? Path.Combine(package.RootDirectory, "glossary.json") : null;
 
-    var allTerms = repo.GetAllTerms();
-    RenderGlossaryInventory(allTerms);
+    var bookYamlPath = File.Exists(candidatePhysicalYaml) ? candidatePhysicalYaml
+        : File.Exists(candidatePhysicalJson) ? candidatePhysicalJson
+        : (candidateTempYaml != null && File.Exists(candidateTempYaml)) ? candidateTempYaml
+        : (candidateTempJson != null && File.Exists(candidateTempJson)) ? candidateTempJson
+        : candidatePhysicalYaml;
 
-    if (!Console.IsInputRedirected)
+    if (File.Exists(masterYamlPath))
     {
-        var openGlossaryHub = AnsiConsole.Confirm(
-            "\n[bold yellow]Çeviriye başlamadan önce sözlüğü incelemek, yeni terim eklemek veya politikaları düzenlemek ister misiniz?[/]",
-            defaultValue: false);
-
-        if (openGlossaryHub)
+        var masterTerms = await serializationService.ImportAsync(masterYamlPath, cts.Token);
+        if (masterTerms.Count > 0)
         {
-            await GlossaryInteractiveHub.RunAsync(repo, new GlossarySerializationService(), cts.Token);
-            allTerms = repo.GetAllTerms();
-            AnsiConsole.MarkupLine($"\n[bold green]✔ Sözlük güncellendi. Toplam {allTerms.Count} terim ile işleme devam ediliyor.[/]\n");
+            await repo.AddOrUpdateTermsBatchAsync(masterTerms, cts.Token);
+        }
+    }
+    else if (File.Exists(bookYamlPath))
+    {
+        var localTerms = await serializationService.ImportAsync(bookYamlPath, cts.Token);
+        if (localTerms.Count > 0)
+        {
+            await repo.AddOrUpdateTermsBatchAsync(localTerms, cts.Token);
+            await serializationService.ExportAsync(localTerms, masterYamlPath, SerializationFormat.Yaml, cts.Token);
+            AnsiConsole.MarkupLine($"[dim]Kitaba özel sözlük ([cyan]{Path.GetFileName(bookYamlPath)}[/]) yüklendi ve merkezi sözlükle senkronize edildi.[/]");
+        }
+    }
+    else
+    {
+        // Ne master_glossary.yaml ne de kitaba özel glossary.yaml mevcut (İlk Kurulum / Soğuk Başlangıç).
+        // Gömülü 246 terimlik çekirdek tohum sözlüğü (~/.glossator/master_glossary.yaml) otomatik oluştur ve veritabanına aktar:
+        await repo.SeedDefaultTurkishTranslationsAsync(cts.Token);
+        var seedTerms = await repo.GetAllTermsAsync(cts.Token);
+        if (seedTerms.Count > 0)
+        {
+            await serializationService.ExportAsync(seedTerms, masterYamlPath, SerializationFormat.Yaml, cts.Token);
+            AnsiConsole.MarkupLine($"[dim]Temel teknik sözlük ([cyan]{seedTerms.Count}[/] terim, [yellow]~/.glossator/master_glossary.yaml[/]) ilk kez oluşturuldu ve yüklendi.[/]");
         }
     }
 
-    // Checkpoint Channel Kuyruğu & Tekil Arka Plan Yazıcısı (Single-Writer Micro-Batching)
-    var checkpointQueue = new CheckpointQueue();
-    await using var checkpointWriter = new CheckpointBackgroundWriter(checkpointQueue, connectionFactory);
+    // 2. Kitaba Özgü Yeni Terim Çıkarımı (Karantina Mimarisi: Master Sözlüğü korumak için ham terimleri kitaba özel dosyaya yazar)
+    if (autoExtractTerms)
+    {
+        var glossaryTerms = EpubGlossaryReader.Read(package);
+        var indexTerms = EpubIndexReader.Read(package);
+
+        var extractedTerms = glossaryTerms.Concat(indexTerms)
+            .DistinctBy(t => t.EnglishTerm, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (extractedTerms.Count > 0)
+        {
+            var quarantineYamlPath = Path.Combine(physicalBookDir, "glossary.extracted.yaml");
+
+            await serializationService.ExportAsync(extractedTerms, quarantineYamlPath, SerializationFormat.Yaml, cts.Token);
+
+            AnsiConsole.MarkupLine($"\n[bold yellow]Karantina Sözlüğü:[/] Kitap dizininden [bold cyan]{extractedTerms.Count}[/] ham terim çıkarıldı ve '[green]{Markup.Escape(quarantineYamlPath)}[/]' dosyasına kaydedildi.");
+            AnsiConsole.MarkupLine("[dim]İpucu: Bu terimleri inceleyip onayladıktan sonra ana sözlüğe aktarmak için:[/]");
+            AnsiConsole.MarkupLine($"[cyan]  glossator glossary import \"{Markup.Escape(quarantineYamlPath)}\"[/]\n");
+        }
+    }
 
     // Servis Bağımlılıkları (.NET 10 DI)
     hostBuilder.Services.AddSingleton<ISqliteConnectionFactory>(connectionFactory);
     hostBuilder.Services.AddSingleton(repo);
-    hostBuilder.Services.AddSingleton<ICheckpointQueue>(checkpointQueue);
-    hostBuilder.Services.AddSingleton(checkpointWriter);
+    hostBuilder.Services.AddSingleton<CheckpointStore>();
 
     // Per-chapter Scoped dependencies
     hostBuilder.Services.AddScoped(_ => new TermUsageTracker("default"));
@@ -340,146 +421,386 @@ try
 
     hostBuilder.Services.Configure<GlossatorAiOptions>(opts =>
     {
+        opts.ActiveProvider = aiOptions.ActiveProvider;
         opts.Providers = aiOptions.Providers;
         opts.Agents = aiOptions.Agents;
     });
     hostBuilder.Services.AddGlossatorAiClients();
 
     using var host = hostBuilder.Build();
+    await host.StartAsync(cts.Token);
+    var engine = host.Services.GetRequiredService<ParallelLocalizationEngine>();
 
-    // 5. Bölüm Seçim Menüsü (Çoklu Seçim Checkbox, Aralık, Tek veya Tümü)
-    var translatableDocuments = package.Spine.Where(s => s.IsDocument).ToList();
-    List<EpubItem> selectedChapters = [];
-
-    if (!Console.IsInputRedirected)
+    // Eğer doğrudan CLI bayrakları ile çağrıldıysa (Headless / Script Modu)
+    if (isTestMode || requestedSectionCount.HasValue || (Console.IsInputRedirected && !string.IsNullOrWhiteSpace(pathArg)))
     {
-        var selectionMode = AnsiConsole.Prompt(
+        var translatableDocs = GetTranslatableDocuments(package);
+        var targetChapters = isTestMode ? translatableDocs.Take(1).ToList() : translatableDocs;
+        try
+        {
+            await engine.RunAsync(package, targetChapters, concurrency, isFresh, requestedSectionCount, isTestMode, cts.Token);
+            await host.StopAsync();
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"\n[bold red]Headless Mod Hatası:[/] {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // PERSISTENT TUI DASHBOARD & WORKSPACE HUB (ANA UYGULAMA DÖNGÜSÜ)
+    // ─────────────────────────────────────────────────────────────────────────────
+    while (!cts.IsCancellationRequested)
+    {
+        var translatableDocuments = GetTranslatableDocuments(package);
+        activeBookEntry = await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
+        var allTerms = repo.GetAllTerms();
+
+        // 1. Şık ve Bilgilendirici Dashboard Paneli
+        var dashboardTable = new Table().Border(TableBorder.Rounded);
+        dashboardTable.AddColumn(new TableColumn("[bold]Alan[/]"));
+        dashboardTable.AddColumn(new TableColumn("[bold]Bilgi[/]"));
+
+        dashboardTable.AddRow("Aktif Kitap", $"[bold cyan]{Markup.Escape(package.Title)}[/]");
+        dashboardTable.AddRow("Yazar & Yayıncı", $"[green]{Markup.Escape(package.Author ?? "Bilinmiyor")}[/] | [yellow]{Markup.Escape(activeBookEntry.Publisher ?? "Bilinmiyor")}[/]");
+        dashboardTable.AddRow("İlerleme Durumu", $"[bold green]{activeBookEntry.TranslatedChapters} / {activeBookEntry.TotalChapters}[/] Bölüm (%{activeBookEntry.ProgressPercentage:F1})");
+        dashboardTable.AddRow("Master Sözlük", $"[bold cyan]{allTerms.Count}[/] Onaylı Terim (SSOT)");
+        dashboardTable.AddRow("Varsayılan Worker", $"[bold yellow]{concurrency}[/] Paralel İşçi (Worker)");
+
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Panel(dashboardTable)
+            .Header("[bold cyan]GLOSSATOR TUI & WORKSPACE HUD[/]")
+            .BorderColor(Color.Cyan1));
+
+        DrainKeyBuffer();
+
+        // 2. Ana Menü Seçenekleri (Sıfır Onay Yorgunluğu)
+        var menuChoice = AnsiConsole.Prompt(
             new SelectionPrompt<string>()
-                .Title("[bold green]Lütfen çevirmek istediğiniz bölüm seçim modunu belirleyin:[/]")
+                .Title("[bold green]Lütfen yapmak istediğiniz işlemi seçin:[/]")
                 .PageSize(10)
                 .AddChoices(
-                    "☑️  1. Çoklu Bölüm Seçimi (Boşluk tuşu ile işaretleyin / kaldırın)",
-                    $"📚 2. Tüm Kitabı Çevir (Tüm {translatableDocuments.Count} Bölüm)",
-                    "🎯 3. Tek Bir Bölüm Seç (Hızlı Test)",
-                    "🔢 4. Bölüm Numarası veya Aralığı Gir (Örn: 1-5 veya 2,4,6)"));
+                    $"1. Çeviriye Başla (Kaldığı Yerden Devam Et - {concurrency} Worker)",
+                    "2. Özelleştirilmiş Başlatma (Bölüm Seçimi & Worker Sayısı)",
+                    "3. Sözlük ve Terim Yönetim Merkezi (TUI Hub)",
+                    "4. Kitap Değiştir / Kütüphane (Kayıtlı Kitaplar)",
+                    "5. Nihai EPUB'ı Derle ve Paketle",
+                    "0. Çıkış"));
 
-        if (selectionMode.StartsWith("☑️") || selectionMode.Contains("1."))
+        if (menuChoice.StartsWith("0") || menuChoice.Contains("Çıkış"))
         {
-            while (selectedChapters.Count == 0)
+            AnsiConsole.MarkupLine("\n[cyan]Glossator oturumu güvenle kapatıldı. İyi okumalar![/]");
+            return 0;
+        }
+
+        if (menuChoice.StartsWith("1"))
+        {
+            // Kaldığı Yerden Devam Et (Akıllı Bulucu)
+            var pendingChapters = translatableDocuments
+                .Where(doc => !IsDocumentTranslated(package.OpfDirectory, doc.Href))
+                .ToList();
+
+            if (pendingChapters.Count == 0)
+            {
+                AnsiConsole.MarkupLine("\n[bold green]Tebrikler![/] Bu kitaptaki tüm bölümler (%100) zaten tamamlanmış.");
+                AnsiConsole.MarkupLine("[dim]Belirli bir bölümü baştan çalıştırmak için [2] Özelleştirilmiş Başlatma'yı, EPUB derlemek için [5]'i kullanabilirsiniz.[/]");
+                AnsiConsole.MarkupLine("\n[dim]Devam etmek için Enter'a basın...[/]");
+                Console.ReadLine();
+                continue;
+            }
+
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold cyan]> Kaldığı yerden devam ediliyor:[/] [yellow]{pendingChapters.Count}[/] çevrilmemiş bölüm bulundu. [green]{concurrency}[/] Worker başlatılıyor...\n");
+            using var runCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            currentRunCts = runCts;
+            try
+            {
+                await engine.RunAsync(package, pendingChapters, concurrency, isFresh: false, null, isTestMode: false, runCts.Token);
+                host.Services.GetService<TracerProvider>()?.ForceFlush();
+                host.Services.GetService<MeterProvider>()?.ForceFlush();
+                await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
+
+                AnsiConsole.MarkupLine("\n[bold green]İşlem tamamlandı.[/] Ana menüye dönmek için Enter'a basın...");
+                Console.ReadLine();
+            }
+            catch (OperationCanceledException)
+            {
+                AnsiConsole.MarkupLine("\n[bold yellow]İşlem durduruldu (Ctrl+C).[/] O ana kadar tamamlanan bölümler güvenle kaydedildi.");
+                AnsiConsole.MarkupLine("[dim]Ana menüye dönmek için Enter'a basın...[/]");
+                Console.ReadLine();
+            }
+            catch (Exception ex)
+            {
+                await HandleTranslationExceptionAsync(ex, host.Services, aiOptions);
+            }
+            finally
+            {
+                currentRunCts = null;
+            }
+        }
+        else if (menuChoice.StartsWith("2"))
+        {
+            // Özelleştirilmiş Bölüm ve Worker Seçimi
+            var chapterChoiceMode = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("[bold green]Bölüm seçim modunu belirleyin:[/]")
+                    .PageSize(10)
+                    .AddChoices(
+                        "1. Çoklu Bölüm Seçimi (Durum rozetleriyle işaretleyin)",
+                        $"2. Tüm Kitap ({translatableDocuments.Count} Bölüm)",
+                        "3. Tek Bir Bölüm Seç (Hızlı Test)",
+                        "4. Bölüm Numarası veya Aralığı Gir (Örn: 1-5 veya 2,4,6)",
+                        "0. Geri Dön"));
+
+            if (chapterChoiceMode.StartsWith("0") || chapterChoiceMode.Contains("Geri Dön"))
+            {
+                continue;
+            }
+
+            List<EpubItem> selectedChapters = [];
+
+            if (chapterChoiceMode.StartsWith("1"))
             {
                 var multiPrompt = new MultiSelectionPrompt<EpubItem>()
                     .Title("[bold green]Çevirmek istediğiniz bölümleri seçin:[/] [dim](Boşluk: Seç/Kaldır, Enter: Onayla)[/]")
                     .PageSize(15)
-                    .UseConverter(item => $"{Path.GetFileName(item.Href)} - {GetChapterFriendlyName(item)}")
+                    .UseConverter(item =>
+                    {
+                        var isDone = IsDocumentTranslated(package.OpfDirectory, item.Href);
+                        var statusBadge = isDone ? "[green]TAMAM[/]" : "[yellow]BEKLİYOR[/]";
+                        return $"{statusBadge} {Markup.Escape(Path.GetFileName(item.Href))} - {Markup.Escape(GetChapterFriendlyName(item))}";
+                    })
                     .AddChoices(translatableDocuments);
 
                 selectedChapters = AnsiConsole.Prompt(multiPrompt);
+            }
+            else if (chapterChoiceMode.StartsWith("2"))
+            {
+                selectedChapters = translatableDocuments;
+            }
+            else if (chapterChoiceMode.StartsWith("3"))
+            {
+                var singlePrompt = new SelectionPrompt<EpubItem>()
+                    .Title("[bold green]Çevirmek istediğiniz tek bölümü seçin:[/]")
+                    .PageSize(15)
+                    .UseConverter(item =>
+                    {
+                        var isDone = IsDocumentTranslated(package.OpfDirectory, item.Href);
+                        var statusBadge = isDone ? "[green]TAMAM[/]" : "[yellow]BEKLİYOR[/]";
+                        return $"{statusBadge} {Markup.Escape(Path.GetFileName(item.Href))} - {Markup.Escape(GetChapterFriendlyName(item))}";
+                    })
+                    .AddChoices(translatableDocuments);
 
-                if (selectedChapters.Count == 0)
+                selectedChapters = [AnsiConsole.Prompt(singlePrompt)];
+            }
+            else if (chapterChoiceMode.StartsWith("4"))
+            {
+                selectedChapters = PromptChapterRange(package.OpfDirectory, translatableDocuments);
+            }
+
+            if (selectedChapters.Count == 0)
+            {
+                AnsiConsole.MarkupLine("[bold yellow]Hiçbir bölüm seçilmedi, ana menüye dönülüyor.[/]");
+                await Task.Delay(1000);
+                continue;
+            }
+
+            // Worker sayısı ayarı
+            var runConcurrency = AnsiConsole.Prompt(
+                new TextPrompt<int>($"[bold yellow]Kaç paralel işçi (worker thread) çalışsın?[/] [dim](Varsayılan: {concurrency}):[/] ")
+                    .DefaultValue(concurrency)
+                    .Validate(val => val >= 1 && val <= Environment.ProcessorCount * 2
+                        ? ValidationResult.Success()
+                        : ValidationResult.Error($"1 ile {Environment.ProcessorCount * 2} arasında bir değer girin.")));
+
+            var forceFresh = AnsiConsole.Confirm("[bold yellow]Bu bölümler için mevcut çeviri önbelleği temizlensin mi (Sıfırdan çevir)?[/]", defaultValue: false);
+
+            AnsiConsole.Clear();
+            AnsiConsole.MarkupLine($"[bold cyan]> Özel başlatma:[/] [yellow]{selectedChapters.Count}[/] Bölüm, [green]{runConcurrency}[/] Worker...\n");
+            using var runCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            currentRunCts = runCts;
+            try
+            {
+                await engine.RunAsync(package, selectedChapters, runConcurrency, isFresh: forceFresh, requestedSectionCount, isTestMode, runCts.Token);
+                host.Services.GetService<TracerProvider>()?.ForceFlush();
+                host.Services.GetService<MeterProvider>()?.ForceFlush();
+                await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
+
+                AnsiConsole.MarkupLine("\n[bold green]İşlem tamamlandı.[/] Devam etmek için Enter'a basın...");
+                Console.ReadLine();
+            }
+            catch (OperationCanceledException)
+            {
+                AnsiConsole.MarkupLine("\n[bold yellow]İşlem durduruldu (Ctrl+C).[/] O ana kadar tamamlanan bölümler güvenle kaydedildi.");
+                AnsiConsole.MarkupLine("[dim]Ana menüye dönmek için Enter'a basın...[/]");
+                Console.ReadLine();
+            }
+            catch (Exception ex)
+            {
+                await HandleTranslationExceptionAsync(ex, host.Services, aiOptions);
+            }
+            finally
+            {
+                currentRunCts = null;
+            }
+        }
+        else if (menuChoice.StartsWith("3"))
+        {
+            // Sözlük ve Terim Yönetim Merkezi (TUI Hub)
+            await GlossaryInteractiveHub.RunAsync(repo, serializationService, cts.Token);
+        }
+        else if (menuChoice.StartsWith("4"))
+        {
+            // Kitap Değiştir / Kütüphane Yöneticisi
+            while (!cts.IsCancellationRequested)
+            {
+                var recents = await RecentBooksManager.LoadRecentBooksAsync(cts.Token);
+                var choices = new List<string>();
+
+                foreach (var b in recents)
                 {
-                    AnsiConsole.MarkupLine("[bold red]⚠ En az bir bölüm seçmelisiniz![/]");
+                    var exists = File.Exists(b.Path) || Directory.Exists(b.Path);
+                    var status = exists ? $"%{b.ProgressPercentage:F1}" : "[red]KAYIP DOSYA[/]";
+                    choices.Add($"* {b.Title} ({b.Publisher}) ({status}) - {b.Path}");
+                }
+
+                choices.Add("+ Yeni Kitap Yolu Gir / Sürükle Bırak (.epub veya klasör)");
+                if (recents.Count > 0)
+                {
+                    choices.Add("- Listeden Kitap Kaldır");
+                    choices.Add("- Bulunamayan / Silinmiş Kitapları Temizle");
+                }
+                choices.Add("< Geri Dön");
+
+                var bookPick = AnsiConsole.Prompt(
+                    new SelectionPrompt<string>()
+                        .Title("[bold green]Lütfen çalışmak istediğiniz kitabı seçin veya yönetin:[/]")
+                        .PageSize(14)
+                        .UseConverter(Markup.Escape)
+                        .AddChoices(choices));
+
+                if (bookPick.StartsWith("<") || bookPick.Contains("Geri Dön"))
+                {
+                    break;
+                }
+
+                if (bookPick.StartsWith("- Listeden Kitap Kaldır"))
+                {
+                    var removeChoices = recents
+                        .Select(r => $"{r.Title} - {r.Path}")
+                        .Concat(["< İptal"])
+                        .ToList();
+
+                    var toRemove = AnsiConsole.Prompt(
+                        new SelectionPrompt<string>()
+                            .Title("[bold yellow]Kütüphane geçmişinden kaldırmak istediğiniz kitabı seçin (diskteki dosyanız silinmez):[/]")
+                            .PageSize(10)
+                            .UseConverter(Markup.Escape)
+                            .AddChoices(removeChoices));
+
+                    if (!toRemove.StartsWith("<") && !toRemove.Contains("İptal"))
+                    {
+                        var matchedEntry = recents.FirstOrDefault(r => toRemove.Contains(r.Path));
+                        if (matchedEntry != null)
+                        {
+                            await RecentBooksManager.RemoveBookAsync(matchedEntry.Path, cts.Token);
+                            AnsiConsole.MarkupLine($"\n[bold green]OK:[/] '[cyan]{Markup.Escape(matchedEntry.Title)}[/]' kütüphane geçmişinden kaldırıldı.");
+                            await Task.Delay(1000);
+                        }
+                    }
+                    continue;
+                }
+
+                if (bookPick.StartsWith("- Bulunamayan"))
+                {
+                    var cleanedCount = await RecentBooksManager.CleanMissingBooksAsync(cts.Token);
+                    if (cleanedCount > 0)
+                    {
+                        AnsiConsole.MarkupLine($"\n[bold green]OK:[/] Diskte artık bulunamayan [cyan]{cleanedCount}[/] kitap kütüphane geçmişinden temizlendi.");
+                    }
+                    else
+                    {
+                        AnsiConsole.MarkupLine("\n[dim]Tüm kayıtlı kitaplar diskte mevcut, temizlenecek kayıp dosya yok.[/]");
+                    }
+                    await Task.Delay(1200);
+                    continue;
+                }
+
+                string targetNewPath;
+                if (bookPick.StartsWith("+") || bookPick.Contains("Yeni Kitap"))
+                {
+                    targetNewPath = AnsiConsole.Ask<string>("[yellow]Lütfen .epub dosyasını veya klasör yolunu sürükleyip bırakın:[/] ").Trim('"', '\'');
+                }
+                else
+                {
+                    var matched = recents.FirstOrDefault(r => bookPick.Contains(r.Path));
+                    targetNewPath = matched?.Path ?? bookPath;
+                }
+
+                if (Directory.Exists(targetNewPath) || File.Exists(targetNewPath))
+                {
+                    bookPath = targetNewPath;
+                    package = EpubManifestReader.Read(bookPath);
+                    activeBookEntry = await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
+
+                    // Yeni kitaptan terimleri karantinaya çıkarma (Master Sözlüğü korur)
+                    if (autoExtractTerms)
+                    {
+                        var newGlossaryTerms = EpubGlossaryReader.Read(package);
+                        var newIndexTerms = EpubIndexReader.Read(package);
+                        var extractedTerms = newGlossaryTerms.Concat(newIndexTerms)
+                            .DistinctBy(t => t.EnglishTerm, StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+
+                        if (extractedTerms.Count > 0)
+                        {
+                            var bookDirectory = Path.GetDirectoryName(Path.GetFullPath(bookPath)) ?? AppContext.BaseDirectory;
+                            var quarantineYamlPath = Path.Combine(bookDirectory, "glossary.extracted.yaml");
+                            await serializationService.ExportAsync(extractedTerms, quarantineYamlPath, SerializationFormat.Yaml, cts.Token);
+                            AnsiConsole.MarkupLine($"[dim]Kitap dizininden {extractedTerms.Count} ham terim 'glossary.extracted.yaml' dosyasına yazıldı.[/]");
+                        }
+                    }
+
+                    AnsiConsole.MarkupLine($"\n[bold green]OK:[/] Aktif kitap başarıyla seçildi: [bold cyan]{Markup.Escape(package.Title)}[/]");
+                    AnsiConsole.MarkupLine($"[dim]Durum: {activeBookEntry.TranslatedChapters} / {activeBookEntry.TotalChapters} Bölüm (%{activeBookEntry.ProgressPercentage:F1})[/]\n");
+
+                    DrainKeyBuffer();
+
+                    var postSwitchAction = AnsiConsole.Prompt(
+                        new SelectionPrompt<string>()
+                            .Title("[bold green]Seçilen kitap ile ne yapmak istersiniz?[/]")
+                            .AddChoices(
+                                "1. Ana Dashboard'a Dön (İncele & Ayarları Gör)",
+                                "2. Başka Bir Kitap Seç"));
+
+                    if (postSwitchAction.StartsWith("1"))
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"\n[bold red]Hata:[/] Belirtilen yol bulunamadı: {Markup.Escape(targetNewPath)}");
+                    await Task.Delay(2000);
                 }
             }
         }
-        else if (selectionMode.StartsWith("📚") || selectionMode.Contains("2."))
+        else if (menuChoice.StartsWith("5"))
         {
-            selectedChapters = translatableDocuments;
-        }
-        else if (selectionMode.StartsWith("🎯") || selectionMode.Contains("3."))
-        {
-            var singlePrompt = new SelectionPrompt<EpubItem>()
-                .Title("[bold green]Çevirmek istediğiniz tek bölümü seçin:[/]")
-                .PageSize(15)
-                .UseConverter(item => $"{Path.GetFileName(item.Href)} - {GetChapterFriendlyName(item)}")
-                .AddChoices(translatableDocuments);
-
-            selectedChapters = [AnsiConsole.Prompt(singlePrompt)];
-        }
-        else if (selectionMode.StartsWith("🔢") || selectionMode.Contains("4."))
-        {
-            selectedChapters = PromptChapterRange(translatableDocuments);
-        }
-    }
-    else
-    {
-        var def = translatableDocuments.FirstOrDefault() ?? package.Spine.First();
-        selectedChapters = [def];
-    }
-
-    // 6. Dinamik Eşzamanlılık (Worker Pool Boyutu) Belirleme
-    if (!hasExplicitConcurrency && !Console.IsInputRedirected)
-    {
-        if (selectedChapters.Count == 1)
-        {
-            concurrency = 1;
-        }
-        else
-        {
-            var maxConcurrency = Math.Min(selectedChapters.Count, Environment.ProcessorCount * 2);
-            var defaultConcurrency = Math.Clamp(Math.Min(selectedChapters.Count, 3), 1, Environment.ProcessorCount);
-
-            concurrency = AnsiConsole.Prompt(
-                new TextPrompt<int>($"[bold yellow]Kaç paralel işçi (worker thread) çalışsın?[/] [dim](1 ile {maxConcurrency} arası, Varsayılan: {defaultConcurrency}):[/] ")
-                    .DefaultValue(defaultConcurrency)
-                    .Validate(val => val >= 1 && val <= Environment.ProcessorCount * 2
-                        ? ValidationResult.Success()
-                        : ValidationResult.Error($"Lütfen 1 ile {Environment.ProcessorCount * 2} arasında bir değer girin.")));
-
-            concurrency = Math.Clamp(concurrency, 1, selectedChapters.Count);
-        }
-    }
-    else
-    {
-        concurrency = Math.Clamp(concurrency, 1, Math.Max(1, selectedChapters.Count));
-    }
-
-    // Ön-Başlatma Doğrulama ve Onay Tablosu
-    var preLaunchTable = new Table().Border(TableBorder.DoubleEdge);
-    preLaunchTable.Title("[bold green]🚀 Yerelleştirme Boru Hattı Başlatma Özeti[/]");
-    preLaunchTable.AddColumn(new TableColumn("[bold]Parametre[/]"));
-    preLaunchTable.AddColumn(new TableColumn("[bold]Değer[/]"));
-
-    preLaunchTable.AddRow("Kitap", $"[bold cyan]{Markup.Escape(package.Title)}[/]");
-    preLaunchTable.AddRow("Seçilen Bölüm Sayısı", $"[bold yellow]{selectedChapters.Count}[/] adet");
-    preLaunchTable.AddRow("Bölümler", $"[dim]{string.Join(", ", selectedChapters.Take(4).Select(c => Path.GetFileName(c.Href)))}{(selectedChapters.Count > 4 ? $" ... (+{selectedChapters.Count - 4} daha)" : "")}[/]");
-    preLaunchTable.AddRow("Paralel İşçi (Worker)", $"[bold green]{concurrency}[/] iş parçacığı");
-    preLaunchTable.AddRow("Sözlük Durumu", $"[bold cyan]{allTerms.Count}[/] terim (3-Tier Politika)");
-    preLaunchTable.AddRow("Çalışma Modu", isTestMode ? "[yellow]Test Modu (Kısıtlı Bölüm)[/]" : (isFresh ? "[magenta]Fresh Modu (Sıfırdan)[/]" : "[green]Checkpoint'ten Devam Eden Mod[/]"));
-
-    AnsiConsole.Write(preLaunchTable);
-
-    if (!Console.IsInputRedirected)
-    {
-        var proceed = AnsiConsole.Confirm("\n[bold green]Yerelleştirme motoru bu ayarlarla başlatılsın mı?[/]", defaultValue: true);
-        if (!proceed)
-        {
-            AnsiConsole.MarkupLine("[yellow]İşlem kullanıcı tarafından iptal edildi.[/]");
-            return 0;
-        }
-    }
-
-    // 7. Seçilen Bölümleri Paralel İşçi Havuzu ile İşle
-    AnsiConsole.MarkupLine($"\n[bold cyan]🚀 Paralel İşçi Havuzu Başlatılıyor: [yellow]{selectedChapters.Count}[/] Bölüm, [green]{concurrency}[/] Worker...[/]\n");
-    var engine = host.Services.GetRequiredService<ParallelLocalizationEngine>();
-    await engine.RunAsync(package, selectedChapters, concurrency, isFresh, requestedSectionCount, isTestMode, cts.Token);
-
-    tracerProvider.ForceFlush();
-    meterProvider.ForceFlush();
-
-    // 7. Bitiş Özeti ve Paketleme
-    AnsiConsole.MarkupLine("\n[bold green]🎉 Hedeflenen tüm belgeler başarıyla işlendi ve kaydedildi![/]");
-    if (!Console.IsInputRedirected)
-    {
-        var packageConfirmation = AnsiConsole.Confirm("\n[bold yellow]Çevrilen kitabı şimdi standart EPUB olarak paketlemek ister misiniz?[/]", defaultValue: true);
-        if (packageConfirmation)
-        {
+            // EPUB Paketleme Motoru
             RunPackaging(package, explicitOutputPath);
+            AnsiConsole.MarkupLine("\n[dim]Ana menüye dönmek için Enter'a basın...[/]");
+            Console.ReadLine();
         }
-
-        AnsiConsole.MarkupLine("[dim]Çıkmak için Enter'a basın...[/]");
-        Console.ReadLine();
     }
 
+    await host.StopAsync();
     return 0;
 }
 catch (OperationCanceledException)
@@ -490,9 +811,19 @@ catch (OperationCanceledException)
 }
 catch (Exception ex)
 {
-    AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] {ex.Message}");
+    AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] {Markup.Escape(ex.Message)}");
     AnsiConsole.WriteException(ex);
     return 1;
+}
+
+static List<EpubItem> GetTranslatableDocuments(EpubPackage package)
+{
+    return package.Spine
+        .Where(s => s.IsDocument &&
+                    s.Role != EpubDocumentRole.Index &&
+                    s.Role != EpubDocumentRole.Cover &&
+                    s.Role != EpubDocumentRole.Navigation)
+        .ToList();
 }
 
 static string ResolveBookPath(string? candidate)
@@ -532,13 +863,13 @@ static string ResolveBookPath(string? candidate)
 
 static void RunPackaging(EpubPackage package, string? customOutputPath = null)
 {
-    AnsiConsole.MarkupLine("\n[bold cyan]📦 EPUB Paketleme Motoru Çalıştırılıyor...[/]");
+    AnsiConsole.MarkupLine("\n[bold cyan]> EPUB Paketleme Motoru Çalıştırılıyor...[/]");
     var translations = EpubPackager.DiscoverTranslations(package);
-    AnsiConsole.MarkupLine($"[green]✔ Bulunan Çevrilmiş Dosya:[/] [bold cyan]{translations.Count}[/] adet");
+    AnsiConsole.MarkupLine($"[green]+ Bulunan Çevrilmiş Dosya:[/] [bold cyan]{translations.Count}[/] adet");
 
     if (translations.Count == 0)
     {
-        AnsiConsole.MarkupLine("[bold yellow]⚠ Uyarı:[/] Henüz çevrilmiş (*_tr.html) dosya bulunamadı! Lütfen önce bölümleri çevirin.");
+        AnsiConsole.MarkupLine("[bold yellow]Uyarı:[/] Henüz çevrilmiş (*_tr.xhtml / *_tr.html) dosya bulunamadı! Lütfen önce bölümleri çevirin.");
         return;
     }
 
@@ -555,10 +886,10 @@ static void RunPackaging(EpubPackage package, string? customOutputPath = null)
     table.AddRow("Standart", "[green]IDPF EPUB 3 / EPUB 2 Uyumlu (mimetype uncompressed ilk sıra)[/]");
 
     AnsiConsole.Write(new Panel(table)
-        .Header("[bold green]🎉 EPUB PAKETLEME BAŞARIYLA TAMAMLANDI[/]")
+        .Header("[bold green]EPUB PAKETLEME TAMAMLANDI[/]")
         .BorderColor(Color.Green));
 
-    AnsiConsole.MarkupLine($"\n[bold green]✔ Kitabınız tabletinizde (Apple Books / Kindle / Kobo / Calibre) okunmaya hazır![/]\n");
+    AnsiConsole.MarkupLine($"\n[bold green]OK:[/] Kitabınız tabletinizde (Apple Books / Kindle / Kobo / Calibre) okunmaya hazır!\n");
 }
 
 static string GetChapterFriendlyName(EpubItem item)
@@ -569,78 +900,7 @@ static string GetChapterFriendlyName(EpubItem item)
     return Path.GetFileNameWithoutExtension(item.Href);
 }
 
-static void RenderGlossaryInventory(List<GlossaryEntry> terms)
-{
-    var total = terms.Count;
-    var progressive = terms.Count(t => t.Policy == GlossingPolicy.ProgressiveGloss);
-    var alwaysEn = terms.Count(t => t.Policy == GlossingPolicy.AlwaysEnglish);
-    var alwaysTr = terms.Count(t => t.Policy == GlossingPolicy.AlwaysTurkish);
-    var reviewed = terms.Count(t => t.IsReviewed);
-
-    var statsTable = new Table().Border(TableBorder.Rounded);
-    statsTable.Title($"[bold cyan]📚 Sözlük ve Terim Envanteri (Toplam: {total} Terim - SQLite)[/]");
-    statsTable.AddColumn(new TableColumn("[bold]Politika / Kategori[/]"));
-    statsTable.AddColumn(new TableColumn("[bold]Terim Sayısı[/]").RightAligned());
-    statsTable.AddColumn(new TableColumn("[bold]Dağılım (%)[/]").RightAligned());
-    statsTable.AddColumn(new TableColumn("[bold]Yerelleştirme Davranışı[/]"));
-
-    statsTable.AddRow(
-        "[cyan]ProgressiveGloss[/]",
-        $"[bold cyan]{progressive}[/]",
-        total > 0 ? $"{progressive * 100.0 / total:F1}%" : "0%",
-        "İlk geçişte çift dilli [[EN (TR)]], sonraki geçişlerde Türkçe");
-    statsTable.AddRow(
-        "[magenta]AlwaysEnglish[/]",
-        $"[bold magenta]{alwaysEn}[/]",
-        total > 0 ? $"{alwaysEn * 100.0 / total:F1}%" : "0%",
-        "Kod, API veya endüstri standardı (orijinal dilde korunur)");
-    statsTable.AddRow(
-        "[green]AlwaysTurkish[/]",
-        $"[bold green]{alwaysTr}[/]",
-        total > 0 ? $"{alwaysTr * 100.0 / total:F1}%" : "0%",
-        "Yerleşik Türkçe karşılığı kullanılır (çekim eki uyumlu)");
-    statsTable.AddRow(
-        "[dim]İncelenmiş / Onaylı[/]",
-        $"[dim]{reviewed}[/]",
-        total > 0 ? $"{reviewed * 100.0 / total:F1}%" : "0%",
-        "Kullanıcı veya sözlük kurallarınca onaylanmış terimler");
-
-    AnsiConsole.Write(statsTable);
-
-    var sampleTerms = terms.Take(10).ToList();
-    if (sampleTerms.Count > 0)
-    {
-        var sampleTable = new Table().Border(TableBorder.SimpleHeavy);
-        sampleTable.Title("[bold yellow]🔍 Örnek Terimler ve Politika Eşleşmeleri (İlk 10 Kayıt)[/]");
-        sampleTable.AddColumn(new TableColumn("[dim]ID[/]").RightAligned());
-        sampleTable.AddColumn(new TableColumn("[bold]İngilizce Terim[/]"));
-        sampleTable.AddColumn(new TableColumn("[bold]Türkçe Karşılık[/]"));
-        sampleTable.AddColumn(new TableColumn("[bold]Politika[/]"));
-        sampleTable.AddColumn(new TableColumn("[bold]Durum[/]").Centered());
-
-        foreach (var t in sampleTerms)
-        {
-            var pColor = t.Policy switch
-            {
-                GlossingPolicy.AlwaysEnglish => "magenta",
-                GlossingPolicy.AlwaysTurkish => "green",
-                _ => "cyan"
-            };
-
-            sampleTable.AddRow(
-                $"[dim]#{t.Id}[/]",
-                $"[bold white]{Markup.Escape(t.EnglishTerm)}[/]",
-                t.TurkishTerm != null ? $"[{pColor}]{Markup.Escape(t.TurkishTerm)}[/]" : "[dim]- (Kural Bekliyor)[/]",
-                $"[{pColor}]{t.Policy}[/]",
-                t.IsReviewed ? "[green]✔ Onaylı[/]" : "[yellow]⚠ Ham[/]"
-            );
-        }
-
-        AnsiConsole.Write(sampleTable);
-    }
-}
-
-static List<EpubItem> PromptChapterRange(List<EpubItem> documents)
+static List<EpubItem> PromptChapterRange(string opfDirectory, List<EpubItem> documents)
 {
     while (true)
     {
@@ -648,13 +908,27 @@ static List<EpubItem> PromptChapterRange(List<EpubItem> documents)
         for (int idx = 0; idx < documents.Count; idx++)
         {
             var doc = documents[idx];
-            AnsiConsole.MarkupLine($"  [yellow]{idx + 1:D2}.[/] [cyan]{Path.GetFileName(doc.Href)}[/] - [dim]{GetChapterFriendlyName(doc)}[/]");
+            var isDone = IsDocumentTranslated(opfDirectory, doc.Href);
+            var badge = isDone ? "[green]TAMAM[/]" : "[dim]--[/]";
+            AnsiConsole.MarkupLine($"  [yellow]{idx + 1:D2}.[/] {badge} [cyan]{Markup.Escape(Path.GetFileName(doc.Href))}[/] - [dim]{Markup.Escape(GetChapterFriendlyName(doc))}[/]");
         }
 
-        var input = AnsiConsole.Ask<string>("\n[bold yellow]Bölüm aralığı veya numaraları girin (Örn: 1-3 veya 1,3,5):[/] ").Trim();
-        var selectedIndices = new HashSet<int>();
+        var promptText = "\n[bold yellow]Bölüm aralığı veya numaraları girin (Örn: 1-3 veya 1,3,5) [dim][[Ana menü için 0 veya q]][/]:[/] ";
+        var rawInput = AnsiConsole.Prompt(
+            new TextPrompt<string>(promptText)
+                .AllowEmpty())?.Trim() ?? string.Empty;
 
-        var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (string.IsNullOrWhiteSpace(rawInput) ||
+            rawInput == "0" ||
+            rawInput.Equals("q", StringComparison.OrdinalIgnoreCase) ||
+            rawInput.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+            rawInput.Equals("iptal", StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var selectedIndices = new HashSet<int>();
+        var parts = rawInput.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         bool parseSuccess = true;
 
         foreach (var part in parts)
@@ -691,6 +965,186 @@ static List<EpubItem> PromptChapterRange(List<EpubItem> documents)
             return selectedIndices.OrderBy(i => i).Select(i => documents[i]).ToList();
         }
 
-        AnsiConsole.MarkupLine("[bold red]⚠ Geçersiz aralık veya numara formatı. Lütfen tekrar deneyin.[/]");
+        AnsiConsole.MarkupLine("[bold red]HATA:[/] Geçersiz aralık veya numara formatı. Lütfen tekrar deneyin.");
     }
 }
+
+static bool IsDocumentTranslated(string opfDirectory, string docHref)
+    => DocumentTranslationStatus.IsDocumentTranslated(opfDirectory, docHref);
+
+static void DrainKeyBuffer()
+{
+    try
+    {
+        while (Console.KeyAvailable)
+        {
+            Console.ReadKey(intercept: true);
+        }
+    }
+    catch
+    {
+        // Standart girdi yeniden yönlendirildiyse veya konsol erişimi yoksa yoksay
+    }
+}
+
+static async Task HandleTranslationExceptionAsync(
+    Exception ex,
+    IServiceProvider services,
+    GlossatorAiOptions aiOptions)
+{
+    bool isAuthError = false;
+    string? authDetail = null;
+
+    var current = ex;
+    while (current != null)
+    {
+        if (current is System.ClientModel.ClientResultException cre && cre.Status == 401)
+        {
+            isAuthError = true;
+            authDetail = cre.Message;
+            break;
+        }
+        if (current.Message.Contains("401") ||
+            current.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase) ||
+            current.Message.Contains("Geçersiz API anahtarı", StringComparison.OrdinalIgnoreCase) ||
+            current.Message.Contains("authentication_error", StringComparison.OrdinalIgnoreCase))
+        {
+            isAuthError = true;
+            authDetail = current.Message;
+            break;
+        }
+        current = current.InnerException;
+    }
+
+    if (isAuthError)
+    {
+        var (activeProviderName, activeConfig, _) = aiOptions.ResolveAgent(AiServiceExtensions.KeyStyleAnalyst);
+
+        var panel = new Panel(
+            new Markup($"[bold red]HATA: HTTP 401 - Yetkilendirme / API Anahtarı Reddedildi![/]\n\n" +
+                       $"Aktif Sağlayıcı : [cyan]{Markup.Escape(activeProviderName)}[/]\n" +
+                       $"Endpoint        : [yellow]{Markup.Escape(activeConfig?.Endpoint ?? "Bilinmiyor")}[/]\n" +
+                       $"Sunucu Yanıtı   : [red]{Markup.Escape(authDetail ?? "Geçersiz API anahtarı")}[/]\n\n" +
+                       $"[dim]Not: O ana kadar çevrilen tüm bölümler ve ara checkpoint kayıtları SQLite ve diskte güvenle saklandı.[/]"))
+            .Header("[bold red]API KİMLİK DOĞRULAMA HATASI[/]")
+            .BorderColor(Color.Red);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(panel);
+        AnsiConsole.WriteLine();
+
+        DrainKeyBuffer();
+
+        var updateKey = AnsiConsole.Confirm($"[bold yellow]'{Markup.Escape(activeProviderName)}' için yeni bir API anahtarı girmek ister misiniz?[/]", defaultValue: true);
+        if (updateKey)
+        {
+            var newKey = AnsiConsole.Prompt(
+                new TextPrompt<string>($"[bold green]Lütfen {Markup.Escape(activeProviderName)} API Anahtarınızı girin:[/] ")
+                    .Secret());
+
+            if (!string.IsNullOrWhiteSpace(newKey))
+            {
+                var trimmed = newKey.Trim();
+                if (aiOptions.Providers.TryGetValue(activeProviderName, out var targetProv))
+                {
+                    targetProv.ApiKey = trimmed;
+                }
+
+                var optionsInstance = services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
+                if (optionsInstance != null && optionsInstance.Providers.TryGetValue(activeProviderName, out var optProv))
+                {
+                    optProv.ApiKey = trimmed;
+                }
+
+                AnsiConsole.MarkupLine($"\n[bold green]OK:[/] '[cyan]{Markup.Escape(activeProviderName)}[/]' API anahtarı çalışma zamanında güncellendi.");
+
+                var saveToDisk = AnsiConsole.Confirm("[dim]Bu API anahtarını kalıcı olması için kullanıcı profiline (~/.glossator/user_settings.json) kaydetmek ister misiniz?[/]", defaultValue: true);
+                if (saveToDisk)
+                {
+                    await TrySaveApiKeyToUserSettingsAsync(activeProviderName, trimmed);
+                }
+
+                AnsiConsole.MarkupLine("[bold cyan]Şimdi ana menüden '1. Çeviriye Başla' diyerek kaldığınız yerden devam edebilirsiniz.[/]");
+            }
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[dim]İşlem iptal edildi. Ana menüye dönülüyor...[/]");
+        }
+
+        AnsiConsole.MarkupLine("\n[dim]Devam etmek için Enter'a basın...[/]");
+        Console.ReadLine();
+    }
+    else
+    {
+        var errorPanel = new Panel(
+            new Markup($"[bold red]Çeviri sırasında bir hata oluştu:[/] {Markup.Escape(ex.Message)}\n\n" +
+                       $"[dim]Ayrıntı: {Markup.Escape(ex.InnerException?.Message ?? "Yok")}[/]\n\n" +
+                       $"[dim]Veritabanı tutarlılığı korunmuştur. Yapılan ilerleme güvenle saklandı.[/]"))
+            .Header("[bold red]HATA BİLDİRİMİ[/]")
+            .BorderColor(Color.Red);
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(errorPanel);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Ana menüye dönmek için Enter'a basın...[/]");
+        Console.ReadLine();
+    }
+}
+
+static async Task TrySaveApiKeyToUserSettingsAsync(string providerName, string newKey)
+{
+    var settingsPath = GlossatorPaths.GetUserSettingsPath();
+    try
+    {
+        System.Text.Json.Nodes.JsonNode node;
+        if (File.Exists(settingsPath))
+        {
+            var existingJson = await File.ReadAllTextAsync(settingsPath);
+            node = System.Text.Json.Nodes.JsonNode.Parse(existingJson) ?? new System.Text.Json.Nodes.JsonObject();
+        }
+        else
+        {
+            node = new System.Text.Json.Nodes.JsonObject();
+        }
+
+        var glossatorAi = node["GlossatorAi"] as System.Text.Json.Nodes.JsonObject;
+        if (glossatorAi == null)
+        {
+            glossatorAi = new System.Text.Json.Nodes.JsonObject();
+            node["GlossatorAi"] = glossatorAi;
+        }
+
+        var providers = glossatorAi["Providers"] as System.Text.Json.Nodes.JsonObject;
+        if (providers == null)
+        {
+            providers = new System.Text.Json.Nodes.JsonObject();
+            glossatorAi["Providers"] = providers;
+        }
+
+        var provider = providers[providerName] as System.Text.Json.Nodes.JsonObject;
+        if (provider == null)
+        {
+            provider = new System.Text.Json.Nodes.JsonObject();
+            providers[providerName] = provider;
+        }
+
+        provider["ApiKey"] = newKey;
+
+        var dir = Path.GetDirectoryName(settingsPath);
+        if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
+        await File.WriteAllTextAsync(settingsPath, node.ToJsonString(opts));
+
+        AnsiConsole.MarkupLine($"[bold green]OK:[/] '[cyan]{providerName}[/]' API anahtarı güvenle kullanıcı profiline (~/.glossator/user_settings.json) kaydedildi. [dim](Git'e asla sızmaz)[/]");
+    }
+    catch (Exception ex)
+    {
+        AnsiConsole.MarkupLine($"[dim red]Kullanıcı ayarları kaydedilirken hata oluştu: {Markup.Escape(ex.Message)}[/]");
+    }
+}
+

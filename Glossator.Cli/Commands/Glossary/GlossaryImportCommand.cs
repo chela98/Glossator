@@ -84,10 +84,10 @@ public sealed class GlossaryImportCommand(SqliteGlossaryRepository repository, I
                 new Markup(
                     $"[bold white]Kaynak Dosya:[/] [cyan]{Markup.Escape(Path.GetFullPath(filePath))}[/]\n" +
                     $"[bold white]İçe Aktarılan Terim Sayısı:[/] [green]{importedCount}[/]\n" +
-                    $"[bold white]Onay Durumu:[/] {(markReviewed ? "[green]✔ Onaylı (Reviewed)[/]" : "[yellow]⚠ Onaysız (Unreviewed)[/]")}\n" +
+                    $"[bold white]Onay Durumu:[/] {(markReviewed ? "[green]Onaylı (Reviewed)[/]" : "[yellow]Onaysız (Unreviewed)[/]")}\n" +
                     $"[bold white]Atanan Kaynak:[/] [yellow]{Markup.Escape(source)}[/]"
                 ))
-                .Header("[bold green]✔ Terimler Başarıyla SQLite Veritabanına İçe Aktarıldı[/]")
+                .Header("[bold green]OK: Terimler Başarıyla SQLite Veritabanına İçe Aktarıldı[/]")
                 .BorderColor(Color.Green);
 
             AnsiConsole.Write(panel);

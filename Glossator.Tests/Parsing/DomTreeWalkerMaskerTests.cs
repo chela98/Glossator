@@ -108,6 +108,39 @@ public class DomTreeWalkerMaskerTests
         Assert.Equal("Şimdi <code>dotnet test</code> çalıştırın.", p.InnerHtml);
     }
 
+    [Theory]
+    [InlineData("Şimdi (PH_1) çalıştırın.")]
+    [InlineData("Şimdi {PH_1} çalıştırın.")]
+    [InlineData("Şimdi ⟦CODE_000001⟧ çalıştırın.")]
+    [InlineData("Şimdi [PH-1] çalıştırın.")]
+    public void UnmaskElement_WhenTokenHasVariedBracketsOrPrefixes_NormalizesAndUnmasks(string mutation)
+    {
+        var html = "<p>Execute <code>dotnet test</code> now.</p>";
+        var doc = _parser.ParseDocument(html);
+        var p = doc.QuerySelector("p")!;
+        var (_, tokens) = DomTreeWalkerMasker.Instance.MaskElement(p);
+
+        DomTreeWalkerMasker.Instance.UnmaskElement(p, mutation, tokens);
+
+        Assert.Equal("Şimdi <code>dotnet test</code> çalıştırın.", p.InnerHtml);
+    }
+
+    [Fact]
+    public void MaskElement_WithSampVarAndTt_ProtectsAllTechnicalNodes()
+    {
+        var html = "<p>Variable <var>x</var> produces output <samp>success</samp> in <tt>monospace</tt>.</p>";
+        var doc = _parser.ParseDocument(html);
+        var p = doc.QuerySelector("p")!;
+
+        var (maskedText, tokens) = DomTreeWalkerMasker.Instance.MaskElement(p);
+
+        Assert.Equal(3, tokens.Count);
+        Assert.Equal("var", tokens[0].TagName);
+        Assert.Equal("samp", tokens[1].TagName);
+        Assert.Equal("tt", tokens[2].TagName);
+        Assert.Contains("Variable ⟦PH_000001⟧ produces output ⟦PH_000002⟧ in ⟦PH_000003⟧.", maskedText);
+    }
+
     [Fact]
     public void UnmaskElement_WhenTokenMissing_ThrowsInvalidOperationException()
     {
@@ -126,5 +159,25 @@ public class DomTreeWalkerMaskerTests
 
         Assert.Contains("Kritik Token Kaybı", ex.Message);
         Assert.Contains("⟦PH_000001⟧", ex.Message);
+    }
+
+    [Fact]
+    public void RestorePlaceholders_WhenLlmDropsToken_PreservesOriginalMarkupAtEnd()
+    {
+        // Arrange: Model bir belirteci (örneğin python kod bloğunu) metinden düşürmüş olsun
+        var tokens = new List<MaskingToken>
+        {
+            new("⟦PH_000001⟧", 1, "<code class=\"python\">def hello(): pass</code>", "code")
+        };
+
+        var translationWithDroppedToken = "Bu fonksiyon selam verir.";
+
+        // Act: RestorePlaceholders çağrıldığında kod bloğu sessizce kaybolmamalı, korunmalıdır
+        var restored = DomTreeWalkerMasker.RestorePlaceholders(translationWithDroppedToken, tokens);
+
+        // Assert
+        Assert.NotNull(restored);
+        Assert.Contains("<code class=\"python\">def hello(): pass</code>", restored);
+        Assert.StartsWith("Bu fonksiyon selam verir.", restored);
     }
 }

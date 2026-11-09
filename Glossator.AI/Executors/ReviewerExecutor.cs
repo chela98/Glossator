@@ -1,7 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Glossator.AI.Models;
-using Glossator.Core.Rules;
+using Glossator.AI.Streaming;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 
@@ -29,29 +30,29 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
         IWorkflowContext context,
         CancellationToken cancellationToken = default)
     {
+        using var activity = Glossator.AI.Diagnostics.GlossatorDiagnostics.ActivitySource.StartActivity("ReviewerAgent");
+        activity?.SetTag("agent.attempt", state.AttemptCount);
+
         // ─────────────────────────────────────────────────────────────────────────────
-        // 1. ADIM: DETERMINİSTİK C# ÖN FİLTRESİ (KIRIK TASLAK KORUMASI - 0 MS)
+        // 1. ADIM: DETERMINİSTİK C# ÖN FİLTRESİ (YALNIZCA MAKİNE VE AST KORUMASI - 0 MS)
         // ─────────────────────────────────────────────────────────────────────────────
         var missingMasks = FindMissingMasks(state.OriginalText, state.CurrentTranslation);
-        var missingTerms = FindMissingTerms(state.DoNotTranslateTerms, state.CurrentTranslation);
         var missingBlocks = FindMissingBlocks(state.OriginalText, state.CurrentTranslation);
 
         // HATA VARSA: LLM Reviewer'a HİÇ GİTMEDEN doğrudan Translator'a iade et!
-        if ((missingMasks.Count > 0 || missingTerms.Count > 0 || missingBlocks.Count > 0) && state.AttemptCount < 3)
+        if ((missingMasks.Count > 0 || missingBlocks.Count > 0) && state.AttemptCount < 3)
         {
             var errors = new List<string>();
             if (missingBlocks.Count > 0)
                 errors.Add($"Eksik bloklar: {string.Join(", ", missingBlocks)}. Tüm [BLOK_xxx] etiketlerini eksiksiz üretmelisin!");
             if (missingMasks.Count > 0)
                 errors.Add($"Eksik yer tutucular: {string.Join(", ", missingMasks)}. [[INDEX_xx]] ve [[CODE_xx]] etiketleri orijinal kalmalı!");
-            if (missingTerms.Count > 0)
-                errors.Add($"Silinmiş dokunulmaz terimler: {string.Join(", ", missingTerms)}. Bu terimler orijinal İngilizce kalmalı!");
 
             var feedback = string.Join("\n", errors);
 
             _stepLogger?.Invoke(new PipelineStepLog(
                 Stage: "Reviewer",
-                Summary: "Kural İhlali Tespit Edildi (C# Ön Filtresi) -> Translator'a İade Ediliyor",
+                Summary: "AST/Etiket İhlali Tespit Edildi (C# Ön Filtresi) -> Translator'a İade Ediliyor",
                 Content: feedback,
                 Attempt: state.AttemptCount));
 
@@ -74,20 +75,28 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             ? string.Join("\n", state.GlossaryTerms.Select(kv => $"- {kv.Key} => {kv.Value}"))
             : "Yok";
 
+        var styleSection = !string.IsNullOrWhiteSpace(state.StyleGuide)
+            ? state.StyleGuide
+            : "Genel O'Reilly teknik mentor mühendis tonu.";
+
+        // KV CACHE HİYERARŞİSİ (Prefix Caching Optimizasyonu):
+        // 1. Bölüm düzeyinde sabit bağlam (Üslup Kılavuzu) EN BAŞTA
+        // 2. Terim sözlüğü ve dokunulmazlar listesi ORTADA
+        // 3. Asıl dinamik yükler: Orijinal İngilizce metin ve Çeviri taslağı EN SONDA
         var userMessage = $"""
-            [ORİJİNAL İNGİLİZCE METİN]:
-            {state.OriginalText}
+            [YAZAR ÜSLUP KILAVUZU]:
+            {styleSection}
 
             [TERİM SÖZLÜĞÜ - RESMİ TÜRKÇE KARŞILIKLAR]:
             {glossarySection}
-            (DENETİM: Çevirmenin bu terimleri resmi Türkçe karşılıklarıyla ("makine öğrenimi uygulayıcıları / uzmanları", "veri bilimci", "modeller", "veri setleri", "maliyet") çevirdiğinden ve 'models ler', 'cost'unu', 'ML pratisyenleri' gibi bozuk Plaza Türkçesi kalıpları KULLANMADIĞINDAN emin ol. Varsa derhal akıcı yayın Türkçesine düzelt).
-            (METNE SADAKAT VE AŞIRI ÇEVİRİ DENETİMİ: Çevirmenin yazarın söylemediği kavramları (örneğin 'irade', 'şuur') veya yapay edebi süsleri ekleyip eklemediğini denetle; varsa yazarın sade ifadesine geri çek!)
 
             [DOKUNULMAYACAK MARKA, PROTOKOL VE KISALTMALAR]:
             {termsList}
-            (KURAL: Bu özel isim ve kısaltmaları orijinal İngilizce halleriyle koru).
 
-            [ÇEVİRİ TASLAĞI]:
+            [ORİJİNAL İNGİLİZCE METİN]:
+            {state.OriginalText}
+
+            [DEĞERLENDİRİLECEK ÇEVİRİ TASLAĞI]:
             {state.CurrentTranslation}
             """;
 
@@ -97,8 +106,16 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             new(ChatRole.User, userMessage)
         };
 
-        var response = await _chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken);
-        var rawResponse = response.Text?.Trim() ?? string.Empty;
+        var streamResult = await StreamingChatHelper.StreamResponseAsync(
+            _chatClient,
+            messages,
+            stageName: "Reviewer",
+            attempt: state.AttemptCount,
+            activity: activity,
+            stepLogger: _stepLogger,
+            cancellationToken: cancellationToken);
+
+        var rawResponse = streamResult.Text.Trim();
 
         // ─────────────────────────────────────────────────────────────────────────────
         // 3. ADIM: JSON PATCH AYRIŞTIRMA VE C# YAMA BİRLEŞTİRME (PATCH MERGER)
@@ -108,29 +125,47 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
 
         if (patchResult != null)
         {
-            // Eğer model çeviriyi kökten reddettiyse Translator'a geri dön
-            if (!patchResult.IsApproved && state.AttemptCount < 3)
+            // Eğer model çeviriyi kökten reddettiyse
+            if (!patchResult.IsApproved)
             {
-                var feedback = !string.IsNullOrWhiteSpace(patchResult.Feedback)
-                    ? patchResult.Feedback
-                    : "Taslak yayın standardını karşılamadı, lütfen üslup kılavuzuna uyarak yeniden çevir.";
-
-                _stepLogger?.Invoke(new PipelineStepLog(
-                    Stage: "Reviewer",
-                    Summary: "Redaksiyon Reddedildi -> Translator'a Döngüsel İade Ediliyor",
-                    Content: feedback,
-                    Attempt: state.AttemptCount));
-
-                return state with
+                if (state.AttemptCount < 3)
                 {
-                    IsApproved = false,
-                    Feedback = feedback,
-                    AttemptCount = state.AttemptCount + 1
-                };
-            }
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+                    activity?.SetTag("review.result", "rejected");
 
-            // Model onayladı: Yamalar var mı kontrol et
-            if (patchResult.Patches != null && patchResult.Patches.Count > 0)
+                    var feedback = !string.IsNullOrWhiteSpace(patchResult.Feedback)
+                        ? patchResult.Feedback
+                        : "Taslak yayın standardını karşılamadı, lütfen üslup kılavuzuna uyarak yeniden çevir.";
+
+                    _stepLogger?.Invoke(new PipelineStepLog(
+                        Stage: "Reviewer",
+                        Summary: "Redaksiyon Reddedildi -> Translator'a Döngüsel İade Ediliyor",
+                        Content: feedback,
+                        Attempt: state.AttemptCount));
+
+                    return state with
+                    {
+                        IsApproved = false,
+                        Feedback = feedback,
+                        AttemptCount = state.AttemptCount + 1
+                    };
+                }
+                else
+                {
+                    // 3. denemede de reddedildi: Artık Translator'a iade edilmeyecek (Limit tükendi)
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+                    activity?.SetTag("review.result", "force_approved_after_exhaustion");
+
+                    _stepLogger?.Invoke(new PipelineStepLog(
+                        Stage: "Reviewer",
+                        Summary: "Uyarı: 3. denemede de redaksiyon onay alamadı. Son taslak en iyi gayret (best-effort) ile kabul ediliyor.",
+                        Content: patchResult.Feedback ?? "Taslak yayın standardını karşılayamadı fakat azami deneme sınırına ulaşıldı.",
+                        Attempt: state.AttemptCount));
+
+                    finalApprovedText = state.CurrentTranslation;
+                }
+            }
+            else if (patchResult.Patches != null && patchResult.Patches.Count > 0)
             {
                 var patchedText = ApplyPatches(state.CurrentTranslation, patchResult.Patches, out var appliedBlocks);
 
@@ -140,6 +175,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
 
                 if (postMissingMasks.Count > 0 || postMissingBlocks.Count > 0)
                 {
+                    activity?.SetTag("review.result", "gatekeeper_rejected_patches");
                     _stepLogger?.Invoke(new PipelineStepLog(
                         Stage: "Reviewer",
                         Summary: "Yama İhlali Engellendi (C# Güvenlik Duvarı)",
@@ -150,6 +186,10 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 }
                 else
                 {
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerPatchesCounter.Add(appliedBlocks.Count);
+                    activity?.SetTag("review.result", "patched");
+                    activity?.SetTag("review.patches_count", appliedBlocks.Count);
+
                     finalApprovedText = patchedText;
                     _stepLogger?.Invoke(new PipelineStepLog(
                         Stage: "Reviewer",
@@ -160,7 +200,8 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             }
             else
             {
-                // Sıfır yama: Taslak zaten kusursuz!
+                // Model onayladı ve sıfır yama: Taslak zaten kusursuz!
+                activity?.SetTag("review.result", "clean_approved");
                 _stepLogger?.Invoke(new PipelineStepLog(
                     Stage: "Reviewer",
                     Summary: "Denetim Başarılı: Kusursuz Taslak (Sıfır Düzeltme)",
@@ -170,10 +211,30 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
         }
         else
         {
-            // Fallback: Model JSON formatında dönmediyse güvenle taslağı koru veya eski tarz blok arayışına gir
+            // Fallback: Model JSON formatında dönmediyse güvenle taslağı doğrudan onaylama, attempt < 3 ise iade et
+            if (state.AttemptCount < 3)
+            {
+                Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+                activity?.SetTag("review.result", "rejected_invalid_json");
+
+                var feedback = "Redaksiyon yanıtı geçerli bir JSON formatında üretilemedi. Lütfen geçerli JSON formatında ve XML blok etiketlerini eksiksiz koruyarak yeniden üretiniz.";
+                _stepLogger?.Invoke(new PipelineStepLog(
+                    Stage: "Reviewer",
+                    Summary: "Geçersiz JSON Yanıtı -> Translator'a Döngüsel İade Ediliyor",
+                    Content: rawResponse,
+                    Attempt: state.AttemptCount));
+
+                return state with
+                {
+                    IsApproved = false,
+                    Feedback = feedback,
+                    AttemptCount = state.AttemptCount + 1
+                };
+            }
+
             _stepLogger?.Invoke(new PipelineStepLog(
                 Stage: "Reviewer",
-                Summary: "Uyarı: Reviewer yanıtı JSON formatında değil, taslak doğrudan onaylandı",
+                Summary: "Uyarı: 3. denemede de geçerli JSON üretilemedi, mevcut taslak zorunlu onaylandı",
                 Content: rawResponse,
                 Attempt: state.AttemptCount));
         }
@@ -185,7 +246,10 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             Feedback = null
         };
 
-        await context.YieldOutputAsync(approvedState, cancellationToken);
+        if (context != null)
+        {
+            await context.YieldOutputAsync(approvedState, cancellationToken);
+        }
         return approvedState;
     }
 
@@ -218,7 +282,8 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             {
                 PropertyNameCaseInsensitive = true,
                 ReadCommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true
+                AllowTrailingCommas = true,
+                NumberHandling = JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.WriteAsString
             };
             return JsonSerializer.Deserialize<ReviewerPatchResult>(cleaned, options);
         }
@@ -293,19 +358,6 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             if (!translation.Contains(match.Value, StringComparison.Ordinal))
             {
                 missing.Add(match.Value);
-            }
-        }
-        return missing;
-    }
-
-    private static List<string> FindMissingTerms(IReadOnlyList<string> expectedTerms, string translation)
-    {
-        var missing = new List<string>();
-        foreach (var term in expectedTerms)
-        {
-            if (!TurkishTermBoundaryMatcher.IsTermPresent(translation, term))
-            {
-                missing.Add(term);
             }
         }
         return missing;

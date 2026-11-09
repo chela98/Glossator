@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using Glossator.Core.Glossary;
 using Glossator.Core.Models.Glossary;
 using Spectre.Console;
@@ -63,7 +63,7 @@ public sealed class GlossaryAddCommand(SqliteGlossaryRepository repository) : As
         {
             if (!Enum.TryParse(settings.Policy, ignoreCase: true, out policy))
             {
-                AnsiConsole.MarkupLine($"[bold yellow]⚠ '{settings.Policy}' geçersiz politika, varsayılan 'ProgressiveGloss' kullanılacak.[/]");
+                AnsiConsole.MarkupLine($"[bold yellow]Uyarı:[/] '{settings.Policy}' geçersiz politika, varsayılan 'ProgressiveGloss' kullanılacak.");
                 policy = GlossingPolicy.ProgressiveGloss;
             }
         }
@@ -88,17 +88,17 @@ public sealed class GlossaryAddCommand(SqliteGlossaryRepository repository) : As
             SourceBook = string.IsNullOrWhiteSpace(settings.Source) ? "CLI Manuel" : settings.Source.Trim()
         };
 
-        var affected = await repository.AddOrUpdateTermAsync(entry, cancellationToken);
+        await repository.AddOrUpdateTermAsync(entry, cancellationToken);
 
         var panel = new Panel(
             new Markup(
                 $"[bold white]İngilizce:[/] [cyan]{Markup.Escape(entry.EnglishTerm)}[/]\n" +
                 $"[bold white]Türkçe:[/] [green]{Markup.Escape(entry.TurkishTerm ?? "-")}[/]\n" +
                 $"[bold white]Politika:[/] [yellow]{entry.Policy}[/]\n" +
-                $"[bold white]Onaylı:[/] {(entry.IsReviewed ? "[green]✔ Evet[/]" : "[yellow]⚠ Hayır[/]")}\n" +
+                $"[bold white]Onaylı:[/] {(entry.IsReviewed ? "[green]Evet[/]" : "[yellow]Hayır[/]")}\n" +
                 $"[bold white]Kaynak:[/] [dim]{Markup.Escape(entry.SourceBook)}[/]"
             ))
-            .Header("[bold green]✔ Terim Sözlüğe Başarıyla Eklendi / Güncellendi[/]")
+            .Header("[bold green]OK: Terim Sözlüğe Başarıyla Eklendi / Güncellendi[/]")
             .BorderColor(Color.Green);
 
         AnsiConsole.Write(panel);

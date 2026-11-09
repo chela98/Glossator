@@ -1,4 +1,4 @@
-﻿using AngleSharp.Html.Parser;
+using AngleSharp.Html.Parser;
 using Glossator.Core.Models.Epub;
 using Glossator.Core.Models.Glossary;
 
@@ -21,25 +21,50 @@ public static class EpubGlossaryReader
         var entries = new List<GlossaryEntry>();
         var dtElements = document.QuerySelectorAll("dt").ToList();
 
-        foreach (var dt in dtElements)
+        if (dtElements.Count > 0)
         {
-            var termText = dt.TextContent.Trim();
-            if (string.IsNullOrEmpty(termText)) continue;
-
-            var dd = dt.NextElementSibling;
-            string? definition = null;
-
-            if (dd != null && dd.TagName.Equals("DD", StringComparison.OrdinalIgnoreCase))
+            foreach (var dt in dtElements)
             {
-                definition = dd.TextContent.Trim();
+                var termText = dt.TextContent.Trim();
+                if (string.IsNullOrEmpty(termText)) continue;
+
+                var dd = dt.NextElementSibling;
+                string? definition = null;
+
+                if (dd != null && dd.TagName.Equals("DD", StringComparison.OrdinalIgnoreCase))
+                {
+                    definition = dd.TextContent.Trim();
+                }
+
+                entries.Add(new GlossaryEntry
+                {
+                    EnglishTerm = termText,
+                    EnglishDefinition = definition,
+                    Policy = GlossingPolicy.ProgressiveGloss
+                });
             }
-
-            entries.Add(new GlossaryEntry
+        }
+        else
+        {
+            // Packt / Wiley alternatifleri: div.glossary-entry, p.glossary-term, vb.
+            var altEntries = document.QuerySelectorAll("div.glossary-entry, div.entry, p.glossary-item");
+            foreach (var el in altEntries)
             {
-                EnglishTerm = termText,
-                EnglishDefinition = definition,
-                Policy = GlossingPolicy.ProgressiveGloss
-            });
+                var termEl = el.QuerySelector("strong, b, h3, h4, span.term");
+                if (termEl == null) continue;
+                var termText = termEl.TextContent.Trim();
+                if (string.IsNullOrWhiteSpace(termText)) continue;
+
+                var defEl = el.QuerySelector("p:not(:has(strong)), span.definition");
+                var def = defEl?.TextContent.Trim();
+
+                entries.Add(new GlossaryEntry
+                {
+                    EnglishTerm = termText,
+                    EnglishDefinition = def,
+                    Policy = GlossingPolicy.ProgressiveGloss
+                });
+            }
         }
 
         return entries;

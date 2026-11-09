@@ -113,7 +113,7 @@ public partial class HtmlSection
 
         foreach (var seg in Segments)
         {
-            if (foundMap.TryGetValue(seg.Index, out var translated))
+            if (foundMap.TryGetValue(seg.Index, out var translated) && !string.IsNullOrWhiteSpace(translated))
             {
                 seg.TranslatedText = translated;
             }

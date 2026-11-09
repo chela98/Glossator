@@ -1,10 +1,11 @@
+using System.Text.RegularExpressions;
 using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using Glossator.Core.Packaging;
 
 namespace Glossator.Core.Parsing;
 
-public static class HtmlSegmenter
+public static partial class HtmlSegmenter
 {
     private static readonly HtmlParser Parser = new();
 
@@ -14,9 +15,29 @@ public static class HtmlSegmenter
         "p", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "caption", "th", "td", "blockquote", "dt", "dd", "li"
     };
 
+    // Alt blok kabul edilen elementler
+    private static readonly HashSet<string> ChildBlockTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "p", "div", "pre", "table", "ul", "ol", "blockquote", "figure", "section", "article", "header", "footer"
+    };
+
+    [GeneratedRegex(@"<(?<tag>a|span|abbr|sup|sub|em|strong|b|i)(?<attrs>(?:\s+[^>]*?)?)\s*/>", RegexOptions.IgnoreCase)]
+    private static partial Regex SelfClosingInlineTagRegex();
+
+    /// <summary>
+    /// EPUB/XHTML dosyalarındaki self-closing satır içi etiketleri (&lt;a .../&gt;, &lt;span .../&gt; vb.)
+    /// AngleSharp HTML5 ayrıştırıcısının etiketleri açık bırakıp devamındaki edebi metni yutmasını önlemek için
+    /// &lt;a ...&gt;&lt;/a&gt; şeklinde tam kapatılmış etiketlere dönüştürür.
+    /// </summary>
+    public static string NormalizeXhtmlContent(string htmlContent)
+    {
+        if (string.IsNullOrEmpty(htmlContent)) return htmlContent;
+        return SelfClosingInlineTagRegex().Replace(htmlContent, "<${tag}${attrs}></${tag}>");
+    }
+
     /// <summary>
     /// HTML dosyasını açar ve çevrilecek güvenli parçalara (segment) ayırır.
-    /// <pre> blokları ve kodlar asla bozulmaz.
+    /// &lt;pre&gt; blokları ve kodlar asla bozulmaz.
     /// </summary>
     public static (IDocument Document, List<HtmlSegment> Segments) SegmentFile(string htmlFilePath)
     {
@@ -26,7 +47,8 @@ public static class HtmlSegmenter
 
     public static (IDocument Document, List<HtmlSegment> Segments) SegmentHtml(string htmlContent)
     {
-        var document = Parser.ParseDocument(htmlContent);
+        var normalizedContent = NormalizeXhtmlContent(htmlContent);
+        var document = Parser.ParseDocument(normalizedContent);
         var segments = new List<HtmlSegment>();
         var segmentIndex = 0;
 
@@ -53,8 +75,6 @@ public static class HtmlSegmenter
 
                 if (!string.IsNullOrWhiteSpace(maskedText))
                 {
-                    var placeholders = tokens.ToDictionary(t => t.Token, t => t.OriginalMarkup);
-
                     segments.Add(new HtmlSegment
                     {
                         Index = segmentIndex++,
@@ -62,10 +82,96 @@ public static class HtmlSegmenter
                         OriginalInnerHtml = innerHtml,
                         MaskedText = maskedText,
                         Tokens = tokens,
-                        Placeholders = placeholders,
                         DomElement = element
                     });
                 }
+            }
+            else if (TranslatableTags.Contains(tagName))
+            {
+                // Eleman içinde alt bloklar (örn. <li> içinde alt <ul> veya alt <ol>) var.
+                // Bu durumda doğrudan çocuk olan satır içi düğümleri (text nodes, <span>, <code>, <strong> vb.)
+                // blok düğümleri arasında gruplayarak ayrı segmentler olarak yakalayalım.
+                var childNodes = element.ChildNodes.ToList();
+                var currentRun = new List<INode>();
+
+                void FlushCurrentRun()
+                {
+                    if (currentRun.Count == 0) return;
+
+                    var combinedText = string.Concat(currentRun.Select(n => n.TextContent)).Trim();
+                    if (!string.IsNullOrWhiteSpace(combinedText))
+                    {
+                        var wrapper = document.CreateElement("div");
+                        foreach (var node in currentRun)
+                        {
+                            wrapper.AppendChild(node.Clone(deep: true));
+                        }
+
+                        var innerHtml = wrapper.InnerHtml.Trim();
+                        var (maskedText, tokens) = DomTreeWalkerMasker.Instance.MaskElement(wrapper);
+
+                        if (!string.IsNullOrWhiteSpace(maskedText))
+                        {
+                            var nodesToReplace = currentRun.ToList();
+                            var parent = element;
+
+                            segments.Add(new HtmlSegment
+                            {
+                                Index = segmentIndex++,
+                                TagName = tagName,
+                                OriginalInnerHtml = innerHtml,
+                                MaskedText = maskedText,
+                                Tokens = tokens,
+                                DomElement = element,
+                                ReplacementAction = (restoredHtml) =>
+                                {
+                                    var parsedFragment = Parser.ParseFragment(restoredHtml, parent);
+                                    var newNodes = parsedFragment.ToList();
+                                    var firstNode = nodesToReplace.FirstOrDefault(n => n.Parent == parent);
+
+                                    if (firstNode != null)
+                                    {
+                                        foreach (var newNode in newNodes)
+                                        {
+                                            parent.InsertBefore(newNode, firstNode);
+                                        }
+                                    }
+                                    else
+                                    {
+                                        foreach (var newNode in newNodes)
+                                        {
+                                            parent.AppendChild(newNode);
+                                        }
+                                    }
+
+                                    foreach (var oldNode in nodesToReplace)
+                                    {
+                                        if (oldNode.Parent == parent)
+                                        {
+                                            parent.RemoveChild(oldNode);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }
+
+                    currentRun.Clear();
+                }
+
+                foreach (var childNode in childNodes)
+                {
+                    if (childNode is IElement childEl && ChildBlockTags.Contains(childEl.TagName))
+                    {
+                        FlushCurrentRun();
+                    }
+                    else
+                    {
+                        currentRun.Add(childNode);
+                    }
+                }
+
+                FlushCurrentRun();
             }
         }
 
@@ -82,7 +188,14 @@ public static class HtmlSegmenter
             if (!string.IsNullOrWhiteSpace(segment.TranslatedText))
             {
                 var restoredHtml = segment.ReconstructHtml();
-                segment.DomElement.InnerHtml = restoredHtml;
+                if (segment.ReplacementAction != null)
+                {
+                    segment.ReplacementAction(restoredHtml);
+                }
+                else
+                {
+                    segment.DomElement.InnerHtml = restoredHtml;
+                }
             }
         }
     }

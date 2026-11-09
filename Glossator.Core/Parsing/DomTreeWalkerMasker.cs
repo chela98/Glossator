@@ -7,7 +7,7 @@ namespace Glossator.Core.Parsing;
 /// AngleSharp DOM ağacını dolaşarak teknik düğümleri (kod, formül, SVG, dizin etiketleri)
 /// deterministik AST seviyesinde yer tutucularla takas eden ve çeviri sonrasında geri yükleyen sınıf.
 /// </summary>
-public sealed partial class DomTreeWalkerMasker : IDomMasker
+public sealed partial class DomTreeWalkerMasker
 {
     public static readonly DomTreeWalkerMasker Instance = new();
 
@@ -16,7 +16,7 @@ public sealed partial class DomTreeWalkerMasker : IDomMasker
         "code", "kbd", "samp", "var", "math", "svg", "tt"
     };
 
-    [GeneratedRegex(@"[\[⟦]{1,2}\s*(?:PH|CODE|INDEX|VAR|MATH|SVG)[_\-\s]*(\d+)\s*[\]⟧]{1,2}", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"[\[⟦{(]{1,2}\s*(?:PH|CODE|INDEX|VAR|MATH|SVG)[_\-\s]*(\d+)\s*[\]⟧})]{1,2}", RegexOptions.IgnoreCase)]
     private static partial Regex FuzzyPlaceholderRegex();
 
     /// <summary>
@@ -37,6 +37,29 @@ public sealed partial class DomTreeWalkerMasker : IDomMasker
     }
 
     /// <summary>
+    /// Verilen metnin yalnızca yer tutuculardan (⟦PH_xxxxxx⟧), sayılardan, boşluklardan veya noktalama işaretlerinden
+    /// oluşup oluşmadığını (anlamlı bir doğal dil cümlesi barındırmadığını) kontrol eder.
+    /// Saf teknik bloklarda çevrilen metnin orijinal yer tutucuyla aynı kalması bir hata değil, beklenen davranıştır.
+    /// </summary>
+    public static bool IsPureTechnicalOrPlaceholder(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true;
+
+        var withoutPlaceholders = FuzzyPlaceholderRegex().Replace(text, "");
+        var letterCount = 0;
+        foreach (var c in withoutPlaceholders)
+        {
+            if (char.IsLetter(c))
+            {
+                letterCount++;
+                if (letterCount >= 2) return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Verilen metindeki ⟦PH_xxxxxx⟧ belirteçlerini deterministik azalan uzunluk sırasıyla
     /// orijinal HTML/XML parçalarıyla takas eder.
     /// </summary>
@@ -52,7 +75,16 @@ public sealed partial class DomTreeWalkerMasker : IDomMasker
 
         foreach (var t in ordered)
         {
-            normalized = normalized.Replace(t.Token, t.OriginalMarkup, StringComparison.Ordinal);
+            if (normalized.Contains(t.Token, StringComparison.Ordinal))
+            {
+                normalized = normalized.Replace(t.Token, t.OriginalMarkup, StringComparison.Ordinal);
+            }
+            else
+            {
+                // Parite Koruması: Model bu belirteci metin içinden düşürdüyse,
+                // kod bloğu, bağlantı veya görselin sessizce yok olmasını önlemek için orijinal işaretlemeyi sonuna iliştir
+                normalized += " " + t.OriginalMarkup;
+            }
         }
 
         return normalized;

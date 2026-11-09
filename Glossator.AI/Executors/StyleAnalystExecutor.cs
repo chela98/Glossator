@@ -1,4 +1,5 @@
 using Glossator.AI.Models;
+using Glossator.AI.Streaming;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 
@@ -36,12 +37,8 @@ public sealed class StyleAnalystExecutor : Executor<TranslationReviewState, Tran
             return state;
         }
 
-        // 2. Üslup kılavuzu boşsa metin örneğinden analiz üret
-        var sampleText = state.OriginalText;
-        if (sampleText.Length > 2500)
-        {
-            sampleText = sampleText[..2500];
-        }
+        // 2. Üslup kılavuzu boşsa metin örneğinden analiz üret (UTF-16 ve kelime sınırına duyarlı güvenli kesim)
+        var sampleText = SliceSafeSampleText(state.OriginalText, 2500);
 
         var messages = new List<ChatMessage>
         {
@@ -49,8 +46,17 @@ public sealed class StyleAnalystExecutor : Executor<TranslationReviewState, Tran
             new(ChatRole.User, $"[ANALİZ EDİLECEK BÖLÜM METNİ]:\n{sampleText}")
         };
 
-        var response = await _chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken);
-        var styleGuide = response.Text?.Trim() ?? string.Empty;
+        var streamResult = await StreamingChatHelper.StreamResponseAsync(
+            _chatClient,
+            messages,
+            stageName: "StyleAnalyst",
+            attempt: 1,
+            stepLogger: _stepLogger,
+            cancellationToken: cancellationToken);
+
+        var styleGuide = !string.IsNullOrWhiteSpace(streamResult.Text)
+            ? streamResult.Text.Trim()
+            : "Genel teknik ve profesyonel O'Reilly mühendislik üslubu (doğrudan, rasyonel ve duru dil).";
 
         _stepLogger?.Invoke(new PipelineStepLog(
             Stage: "StyleAnalyst",
@@ -61,5 +67,29 @@ public sealed class StyleAnalystExecutor : Executor<TranslationReviewState, Tran
         {
             StyleGuide = styleGuide
         };
+    }
+
+    private static string SliceSafeSampleText(string text, int maxChars = 2500)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length <= maxChars)
+        {
+            return text;
+        }
+
+        var cutoff = maxChars;
+        // Eğer cutoff surrogate pair ortasına denk geldiyse 1 karakter geri çek
+        if (char.IsHighSurrogate(text[cutoff - 1]))
+        {
+            cutoff--;
+        }
+
+        // Kelime veya cümle ortasında bölmemek için geriye doğru son boşluk veya satır sonunu bul
+        var lastWhitespace = text.LastIndexOfAny(['\n', '\r', ' ', '\t'], cutoff - 1, Math.Min(cutoff, 200));
+        if (lastWhitespace > 1000)
+        {
+            cutoff = lastWhitespace;
+        }
+
+        return text[..cutoff].Trim();
     }
 }

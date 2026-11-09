@@ -20,16 +20,16 @@ public static class GlossaryInteractiveHub
         {
             var choice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
-                    .Title("\n[bold cyan]📚 GLOSSATOR SÖZLÜK VE TERİM YÖNETİM MERKEZİ[/]")
+                    .Title("\n[bold cyan]GLOSSATOR SÖZLÜK VE TERİM YÖNETİM MERKEZİ[/]")
                     .PageSize(10)
                     .AddChoices(
-                        "1. 📋 Tüm Terimleri Listele (Sayfalı Tablo)",
-                        "2. 🔍 Terim Ara (İngilizce / Türkçe)",
-                        "3. ➕ Yeni Terim Ekle",
-                        "4. ✏️ Terim Düzenle / Politikayı Değiştir",
-                        "5. 📤 Sözlüğü YAML Dosyasına Aktar (glossary.yaml)",
-                        "6. 📥 YAML Dosyasından Sözlüğe İçe Aktar",
-                        "0. 🔙 Geri Dön / Devam Et"));
+                        "1. Tüm Terimleri Listele (Sayfalı Tablo)",
+                        "2. Terim Ara (İngilizce / Türkçe)",
+                        "3. Yeni Terim Ekle",
+                        "4. Terim Düzenle / Politikayı Değiştir",
+                        "5. Sözlüğü YAML Dosyasına Aktar (glossary.yaml)",
+                        "6. YAML Dosyasından Sözlüğe İçe Aktar",
+                        "0. Geri Dön / Devam Et"));
 
             switch (choice[0])
             {
@@ -75,7 +75,7 @@ public static class GlossaryInteractiveHub
             var pagedTerms = allTerms.Skip((currentPage - 1) * pageSize).Take(pageSize).ToList();
 
             var table = new Table().Border(TableBorder.Rounded);
-            table.Title($"[bold cyan]📚 Terim Listesi (Toplam: {allTerms.Count} | Sayfa {currentPage}/{totalPages})[/]");
+            table.Title($"[bold cyan]Terim Listesi (Toplam: {allTerms.Count} | Sayfa {currentPage}/{totalPages})[/]");
             table.AddColumn(new TableColumn("[bold dim]ID[/]").RightAligned());
             table.AddColumn(new TableColumn("[bold]İngilizce Terim[/]"));
             table.AddColumn(new TableColumn("[bold]Türkçe Karşılık[/]"));
@@ -96,17 +96,17 @@ public static class GlossaryInteractiveHub
                     $"[white]{Markup.Escape(t.EnglishTerm)}[/]",
                     t.TurkishTerm != null ? $"[{policyColor}]{Markup.Escape(t.TurkishTerm)}[/]" : "[dim]-[/]",
                     $"[{policyColor}]{t.Policy}[/]",
-                    t.IsReviewed ? "[green]✔[/]" : "[yellow]⚠[/]"
+                    t.IsReviewed ? "[green]ONAYLI[/]" : "[yellow]TASLAK[/]"
                 );
             }
 
             AnsiConsole.Write(table);
 
             var options = new List<string>();
-            if (currentPage < totalPages) options.Add("Sonraki Sayfa ➡️");
-            if (currentPage > 1) options.Add("Önceki Sayfa ⬅️");
-            options.Add("Sayfa Numarasına Git 🔢");
-            options.Add("Menüye Dön 🔙");
+            if (currentPage < totalPages) options.Add("Sonraki Sayfa >");
+            if (currentPage > 1) options.Add("Önceki Sayfa <");
+            options.Add("Sayfa Numarasına Git #");
+            options.Add("Menüye Dön (Geri)");
 
             var navChoice = AnsiConsole.Prompt(
                 new SelectionPrompt<string>()
@@ -147,7 +147,7 @@ public static class GlossaryInteractiveHub
         }
 
         var table = new Table().Border(TableBorder.Rounded);
-        table.Title($"[bold cyan]🔍 Arama Sonuçları: '{Markup.Escape(query)}' ({results.Count} eşleşme)[/]");
+        table.Title($"[bold cyan]Arama Sonuçları: '{Markup.Escape(query)}' ({results.Count} eşleşme)[/]");
         table.AddColumn("ID");
         table.AddColumn("İngilizce Terim");
         table.AddColumn("Türkçe Karşılık");
@@ -168,7 +168,7 @@ public static class GlossaryInteractiveHub
                 $"[bold white]{Markup.Escape(t.EnglishTerm)}[/]",
                 t.TurkishTerm != null ? $"[{policyColor}]{Markup.Escape(t.TurkishTerm)}[/]" : "[dim]-[/]",
                 $"[{policyColor}]{t.Policy}[/]",
-                t.IsReviewed ? "[green]✔[/]" : "[yellow]⚠[/]"
+                t.IsReviewed ? "[green]ONAYLI[/]" : "[yellow]TASLAK[/]"
             );
         }
 
@@ -202,11 +202,11 @@ public static class GlossaryInteractiveHub
             };
 
             await repo.AddOrUpdateTermAsync(entry, ct);
-            AnsiConsole.MarkupLine($"[bold green]✔ Terim başarıyla eklendi:[/] [white]{Markup.Escape(en)}[/] -> [green]{Markup.Escape(tr)}[/] ([yellow]{policy}[/])");
+            AnsiConsole.MarkupLine($"[bold green]OK:[/] Terim başarıyla eklendi: [white]{Markup.Escape(en)}[/] -> [green]{Markup.Escape(tr)}[/] ([yellow]{policy}[/])");
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"\n[bold red]❌ Terim ekleme hatası:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Terim ekleme hatası: {Markup.Escape(ex.Message)}");
         }
     }
 
@@ -226,7 +226,7 @@ public static class GlossaryInteractiveHub
             var selected = AnsiConsole.Prompt(
                 new SelectionPrompt<GlossaryEntry>()
                     .Title("[green]Düzenlenecek terimi seçin:[/]")
-                    .UseConverter(t => $"#{t.Id} {t.EnglishTerm} -> {t.TurkishTerm ?? "-"} ({t.Policy})")
+                    .UseConverter(t => $"#{t.Id} {Markup.Escape(t.EnglishTerm)} -> {Markup.Escape(t.TurkishTerm ?? "-")} ({t.Policy})")
                     .AddChoices(matches));
 
             var newTr = AnsiConsole.Prompt(
@@ -254,11 +254,11 @@ public static class GlossaryInteractiveHub
             selected.IsReviewed = true;
             await repo.AddOrUpdateTermAsync(selected, ct);
 
-            AnsiConsole.MarkupLine($"[bold green]✔ Terim güncellendi:[/] #{selected.Id} [white]{Markup.Escape(selected.EnglishTerm)}[/] -> [green]{Markup.Escape(selected.TurkishTerm ?? "-")}[/] ([yellow]{selected.Policy}[/])");
+            AnsiConsole.MarkupLine($"[bold green]OK:[/] Terim güncellendi: #{selected.Id} [white]{Markup.Escape(selected.EnglishTerm)}[/] -> [green]{Markup.Escape(selected.TurkishTerm ?? "-")}[/] ([yellow]{selected.Policy}[/])");
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"\n[bold red]❌ Terim düzenleme hatası:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Terim düzenleme hatası: {Markup.Escape(ex.Message)}");
         }
     }
 
@@ -293,11 +293,11 @@ public static class GlossaryInteractiveHub
 
             var fileInfo = new FileInfo(path);
             var fullPath = Path.GetFullPath(path);
-            AnsiConsole.MarkupLine($"\n[bold green]✔ Başarılı:[/] Toplam [cyan]{terms.Count}[/] terim [yellow]{Markup.Escape(fullPath)}[/] dosyasına aktarıldı ({fileInfo.Length / 1024.0:F1} KB).\n");
+            AnsiConsole.MarkupLine($"\n[bold green]OK:[/] Başarılı: Toplam [cyan]{terms.Count}[/] terim [yellow]{Markup.Escape(fullPath)}[/] dosyasına aktarıldı ({fileInfo.Length / 1024.0:F1} KB).\n");
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"\n[bold red]❌ Dışa aktarma hatası:[/] {Markup.Escape(ex.Message)}\n");
+            AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Dışa aktarma hatası: {Markup.Escape(ex.Message)}\n");
         }
     }
 
@@ -325,14 +325,14 @@ public static class GlossaryInteractiveHub
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine($"\n[bold red]❌ Belirtilen klasörde 'glossary.yaml' veya 'glossary.json' bulunamadı:[/] [dim]{Markup.Escape(path)}[/]\n");
+                    AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Belirtilen klasörde 'glossary.yaml' veya 'glossary.json' bulunamadı: [dim]{Markup.Escape(path)}[/]\n");
                     return;
                 }
             }
 
             if (!File.Exists(path))
             {
-                AnsiConsole.MarkupLine($"\n[bold red]❌ Dosya bulunamadı:[/] [dim]{Markup.Escape(path)}[/]\n");
+                AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] Dosya bulunamadı: [dim]{Markup.Escape(path)}[/]\n");
                 return;
             }
 
@@ -349,11 +349,11 @@ public static class GlossaryInteractiveHub
                 await repo.AddOrUpdateTermAsync(t, ct);
             }
 
-            AnsiConsole.MarkupLine($"\n[bold green]✔ Başarılı:[/] Toplam [cyan]{terms.Count}[/] terim [yellow]{Markup.Escape(Path.GetFullPath(path))}[/] dosyasından SQLite veritabanına aktarıldı.\n");
+            AnsiConsole.MarkupLine($"\n[bold green]OK:[/] Başarılı: Toplam [cyan]{terms.Count}[/] terim [yellow]{Markup.Escape(Path.GetFullPath(path))}[/] dosyasından SQLite veritabanına aktarıldı.\n");
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"\n[bold red]❌ İçe aktarma hatası:[/] {Markup.Escape(ex.Message)}\n");
+            AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] İçe aktarma hatası: {Markup.Escape(ex.Message)}\n");
         }
     }
 }

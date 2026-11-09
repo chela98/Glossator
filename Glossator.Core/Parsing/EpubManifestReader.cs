@@ -109,20 +109,18 @@ public static class EpubManifestReader
 
     /// <summary>
     /// .epub dosyasını işletim sisteminin geçici klasörüne açar.
+    /// Zaten açılmış ve üzerinde çalışılmış bir oturum varsa çevrilmiş dosyaları korur.
     /// </summary>
     private static string ExtractToTempDirectory(string epubFilePath)
     {
         var fileNameWithoutExt = Path.GetFileNameWithoutExtension(epubFilePath);
         var tempDir = Path.Combine(Path.GetTempPath(), "Glossator", fileNameWithoutExt);
 
-        // Eğer klasör varsa temizleyip güncelini açalım
-        if (Directory.Exists(tempDir))
+        if (!Directory.Exists(tempDir) || !File.Exists(Path.Combine(tempDir, "META-INF", "container.xml")))
         {
-            try { Directory.Delete(tempDir, recursive: true); } catch { /* Kilitli dosya varsa devam et */ }
+            Directory.CreateDirectory(tempDir);
+            SafeZipExtractor.ExtractSafely(epubFilePath, tempDir);
         }
-
-        Directory.CreateDirectory(tempDir);
-        SafeZipExtractor.ExtractSafely(epubFilePath, tempDir);
 
         return tempDir;
     }

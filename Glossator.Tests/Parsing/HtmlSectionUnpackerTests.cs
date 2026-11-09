@@ -163,4 +163,53 @@ public class HtmlSectionUnpackerTests
         Assert.Equal("ch01_sec01_delta", delta.SectionKey);
         Assert.Contains("Kurtarma", delta.Title);
     }
+
+    [Fact]
+    public void TryUnpackTranslations_WithVariedZeroPadding_UnpacksAccurately()
+    {
+        var section = new HtmlSection
+        {
+            SectionIndex = 0,
+            Segments =
+            [
+                new HtmlSegment { Index = 1, TagName = "p", MaskedText = "Original 1" },
+                new HtmlSegment { Index = 42, TagName = "p", MaskedText = "Original 42" }
+            ]
+        };
+
+        var response = """
+            [BLOK_1]
+            Tek basamaklı indeks çevirisi.
+            [/BLOK_1]
+
+            [BLOK_42]
+            İki basamaklı indeks çevirisi.
+            [/BLOK_42]
+            """;
+
+        var success = section.TryUnpackTranslations(response, out var missing);
+
+        Assert.True(success);
+        Assert.Empty(missing);
+        Assert.Equal("Tek basamaklı indeks çevirisi.", section.Segments[0].TranslatedText);
+        Assert.Equal("İki basamaklı indeks çevirisi.", section.Segments[1].TranslatedText);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void TryUnpackTranslations_WithEmptyOrNullResponse_ReturnsFalse(string? emptyResponse)
+    {
+        var section = new HtmlSection
+        {
+            SectionIndex = 0,
+            Segments = [new HtmlSegment { Index = 1, TagName = "p", MaskedText = "Original" }]
+        };
+
+        var success = section.TryUnpackTranslations(emptyResponse!, out var missing);
+
+        Assert.False(success);
+        Assert.Single(missing);
+    }
 }

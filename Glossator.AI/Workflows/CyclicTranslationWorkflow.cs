@@ -6,13 +6,13 @@ using Microsoft.Extensions.AI;
 namespace Glossator.AI.Workflows;
 
 /// <summary>
-/// Microsoft Agent Framework (MAF) durum makinesi tabanlı döngüsel çeviri iş akışı.
-/// StyleAnalyst -> Translator -> Reviewer zincirini kurar ve AddSwitch dallanmasıyla
-/// redaksiyon reddedildiğinde otomatik olarak Translator'a geri yönlendirir.
+/// Microsoft Agent Framework (MAF) Workflows altyapısı üzerinde çalışan,
+/// Translator ve Reviewer arasında çift yönlü durum makinesi (Cyclic Translation Graph) kuran
+/// kurumsal iş akışı orkestratörü.
 /// </summary>
 public sealed class CyclicTranslationWorkflow
 {
-    public const int MaxReviewAttempts = 3;
+    private const int MaxReviewAttempts = 3;
 
     private readonly IChatClient _styleAnalystClient;
     private readonly IChatClient _translatorClient;
@@ -38,16 +38,6 @@ public sealed class CyclicTranslationWorkflow
         _translatorPrompt = translatorPrompt;
         _reviewerPrompt = reviewerPrompt;
         _stepLogger = stepLogger;
-    }
-
-    public CyclicTranslationWorkflow(
-        IChatClient translatorClient,
-        IChatClient reviewerClient,
-        string translatorPrompt,
-        string reviewerPrompt,
-        Action<PipelineStepLog>? stepLogger = null)
-        : this(translatorClient, translatorClient, reviewerClient, string.Empty, translatorPrompt, reviewerPrompt, stepLogger)
-    {
     }
 
     private Workflow CreateWorkflow()
@@ -83,6 +73,8 @@ public sealed class CyclicTranslationWorkflow
         string styleGuide = "",
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var initialState = new TranslationReviewState(
             OriginalText: originalText,
             CurrentTranslation: string.Empty,
@@ -93,39 +85,32 @@ public sealed class CyclicTranslationWorkflow
             Feedback: null,
             AttemptCount: 1);
 
-        for (int retry = 1; retry <= 2; retry++)
+        try
         {
-            try
+            var workflow = CreateWorkflow();
+            Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken);
+
+            var finalState = run.OutgoingEvents
+                .OfType<WorkflowOutputEvent>()
+                .Select(e => e.Data)
+                .OfType<TranslationReviewState>()
+                .LastOrDefault();
+
+            if (finalState != null && !string.IsNullOrWhiteSpace(finalState.CurrentTranslation))
             {
-                var workflow = CreateWorkflow();
-                Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken);
-
-                // %100 Tip Güvenli WorkflowOutputEvent okuma (dynamic reflection hack kaldırıldı!)
-                var finalState = run.OutgoingEvents
-                    .OfType<WorkflowOutputEvent>()
-                    .Select(e => e.Data)
-                    .OfType<TranslationReviewState>()
-                    .LastOrDefault();
-
-                if (finalState != null && !string.IsNullOrWhiteSpace(finalState.CurrentTranslation))
-                {
-                    return finalState.CurrentTranslation.Trim();
-                }
-
-                break;
+                return finalState.CurrentTranslation.Trim();
             }
-            catch (Exception ex)
-            {
-                if (retry == 2)
-                {
-                    _stepLogger?.Invoke(new PipelineStepLog(
-                        Stage: "CyclicWorkflow",
-                        Summary: $"İş Akışı Hatası: {ex.Message}",
-                        Content: ex.ToString()));
-                    break;
-                }
-                await Task.Delay(1500, cancellationToken);
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // İptal sinyali derhal yukarı iletilir, yutulmaz
+        }
+        catch (Exception ex)
+        {
+            _stepLogger?.Invoke(new PipelineStepLog(
+                Stage: "CyclicWorkflow",
+                Summary: $"İş Akışı Hatası: {ex.Message}",
+                Content: ex.ToString()));
         }
 
         return string.Empty;

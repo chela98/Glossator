@@ -1,23 +1,24 @@
+namespace Glossator.Tests.AI;
+
 using System.Runtime.CompilerServices;
 using System.Threading.RateLimiting;
 using Glossator.AI.RateLimiting;
 using Microsoft.Extensions.AI;
 using Xunit;
 
-namespace Glossator.Tests.AI;
-
 public class RateLimitingChatClientTests
 {
     private sealed class TestChatClient : IChatClient
     {
-        public int CallCount { get; private set; }
+        private int _callCount;
+        public int CallCount => Volatile.Read(ref _callCount);
 
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> chatMessages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            CallCount++;
+            Interlocked.Increment(ref _callCount);
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Test Response")));
         }
 
@@ -26,6 +27,7 @@ public class RateLimitingChatClientTests
             ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            Interlocked.Increment(ref _callCount);
             yield return new ChatResponseUpdate(ChatRole.Assistant, "Test Update");
         }
 
@@ -37,7 +39,7 @@ public class RateLimitingChatClientTests
     public async Task GetResponseAsync_WhenPermitAvailable_CallsInnerClient()
     {
         var inner = new TestChatClient();
-        var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
         {
             TokenLimit = 5,
             TokensPerPeriod = 5,
@@ -45,7 +47,7 @@ public class RateLimitingChatClientTests
             QueueLimit = 0
         });
 
-        var client = new RateLimitingChatClient(inner, limiter);
+        using var client = new RateLimitingChatClient(inner, limiter);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
 
         var response = await client.GetResponseAsync(messages);
@@ -59,7 +61,7 @@ public class RateLimitingChatClientTests
     public async Task GetResponseAsync_WhenLimitExhausted_ThrowsInvalidOperationException()
     {
         var inner = new TestChatClient();
-        var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
         {
             TokenLimit = 1,
             TokensPerPeriod = 1,
@@ -67,7 +69,7 @@ public class RateLimitingChatClientTests
             QueueLimit = 0
         });
 
-        var client = new RateLimitingChatClient(inner, limiter);
+        using var client = new RateLimitingChatClient(inner, limiter);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
 
         // 1. çağrı permit alır
@@ -80,10 +82,10 @@ public class RateLimitingChatClientTests
     }
 
     [Fact]
-    public void BuilderExtension_WiresMiddlewareSuccessfully()
+    public async Task BuilderExtension_WiresMiddlewareSuccessfullyAndExecutesCall()
     {
         var inner = new TestChatClient();
-        var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
         {
             TokenLimit = 10,
             TokensPerPeriod = 10,
@@ -91,10 +93,79 @@ public class RateLimitingChatClientTests
             QueueLimit = 0
         });
 
-        var client = inner.AsBuilder()
+        using var client = inner.AsBuilder()
             .UseRateLimiting(limiter)
             .Build();
 
         Assert.NotNull(client);
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello Builder")]);
+        Assert.NotNull(response);
+        Assert.Equal(1, inner.CallCount);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WhenLimitExhausted_ThrowsInvalidOperationException()
+    {
+        var inner = new TestChatClient();
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 1,
+            TokensPerPeriod = 1,
+            ReplenishmentPeriod = TimeSpan.FromHours(1),
+            QueueLimit = 0
+        });
+
+        using var client = new RateLimitingChatClient(inner, limiter);
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
+
+        // 1. stream çağrısı permit alır
+        await foreach (var _ in client.GetStreamingResponseAsync(messages)) { }
+
+        // 2. stream çağrısında limit bittiği için fırlatmalıdır
+        var stream = client.GetStreamingResponseAsync(messages);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in stream) { }
+        });
+
+        Assert.Contains("RateLimiter", ex.Message);
+    }
+
+    [Fact]
+    public async Task RateLimiting_UnderConcurrentRequests_ThrottlesProperly()
+    {
+        var inner = new TestChatClient();
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 5,
+            TokensPerPeriod = 5,
+            ReplenishmentPeriod = TimeSpan.FromHours(1),
+            QueueLimit = 0 // Sıfır kuyruk: Limit dolduğunda anında IsAcquired=false döner
+        });
+
+        using var client = new RateLimitingChatClient(inner, limiter);
+
+        // 10 istek paralel gönderilir (5 başarılı, 5 reddedilmeli)
+        var tasks = Enumerable.Range(0, 10).Select(async _ =>
+        {
+            try
+            {
+                await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Contention")]);
+                return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        });
+
+        var results = await Task.WhenAll(tasks);
+        var successes = results.Count(r => r);
+        var rejections = results.Count(r => !r);
+
+        Assert.Equal(5, successes);
+        Assert.Equal(5, rejections);
+        Assert.Equal(5, inner.CallCount);
     }
 }

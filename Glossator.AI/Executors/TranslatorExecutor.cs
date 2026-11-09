@@ -1,4 +1,5 @@
 using Glossator.AI.Models;
+using Glossator.AI.Streaming;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 
@@ -26,6 +27,9 @@ public sealed class TranslatorExecutor : Executor<TranslationReviewState, Transl
         IWorkflowContext context,
         CancellationToken cancellationToken = default)
     {
+        using var activity = Glossator.AI.Diagnostics.GlossatorDiagnostics.ActivitySource.StartActivity("TranslatorAgent");
+        activity?.SetTag("agent.attempt", state.AttemptCount);
+        activity?.SetTag("input.text_length", state.OriginalText.Length);
         var termsList = state.DoNotTranslateTerms.Count > 0
             ? string.Join(", ", state.DoNotTranslateTerms)
             : "Yok";
@@ -34,22 +38,27 @@ public sealed class TranslatorExecutor : Executor<TranslationReviewState, Transl
             ? string.Join("\n", state.GlossaryTerms.Select(kv => $"- {kv.Key} => {kv.Value}"))
             : "Yok";
 
+        var styleSection = !string.IsNullOrWhiteSpace(state.StyleGuide)
+            ? state.StyleGuide
+            : "Genel O'Reilly teknik mentor mühendis tonu.";
+
         var feedbackSection = !string.IsNullOrWhiteSpace(state.Feedback)
             ? $"\n[ÖNCEKİ DENETİMDEKİ HATALAR - DÜZELTME EMRİ]:\n{state.Feedback}\nLütfen bu düzeltmeleri uygulayarak yeniden çevir!\n"
             : string.Empty;
 
+        // KV CACHE HİYERARŞİSİ (Prefix Caching Optimizasyonu):
+        // 1. Bölüm düzeyinde sabit bağlam (Üslup Kılavuzu) EN BAŞTA
+        // 2. Terim sözlüğü ve dokunulmazlar listesi ORTADA
+        // 3. Varsa düzeltme emri ve asıl dinamik yük ([ÇEVRİLECEK METİN]) EN SONDA
         var userMessage = $"""
             [YAZAR ÜSLUP KILAVUZU]:
-            {state.StyleGuide}
+            {styleSection}
 
             [TERİM SÖZLÜĞÜ - ZORUNLU TÜRKÇE KARŞILIKLAR]:
             {glossarySection}
-            (KURAL: Metinde geçen bu terimleri yukarıdaki resmi Türkçe karşılıklarıyla ve cümlenin akışına göre doğru Türkçe eklerle ('modellerin', 'veri setlerini', 'maliyetini') çevir. ASLA 'models ler', 'cost'unu', 'ML pratisyenleri' gibi bozuk Plaza Türkçesi üretme!)
-            (AYNA İLKESİ KURALI: Yazar ne dediyse birebir o. Metne kendinden felsefi kavram (örneğin 'decision making' için 'irade') veya yapay drama ekleme!)
 
             [DOKUNULMAYACAK MARKA, PROTOKOL VE KISALTMALAR]:
             {termsList}
-            (KURAL: Yukarıdaki marka, kütüphane, protokol ve kısaltmaları KESİNLİKLE Türkçeleştirme! Orijinal İngilizce halleriyle koru).
             {feedbackSection}
             [ÇEVRİLECEK METİN]:
             {state.OriginalText}
@@ -61,14 +70,22 @@ public sealed class TranslatorExecutor : Executor<TranslationReviewState, Transl
             new(ChatRole.User, userMessage)
         };
 
-        var response = await _chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken);
-        var translatedText = response.Text?.Trim() ?? string.Empty;
+        var streamResult = await StreamingChatHelper.StreamResponseAsync(
+            _chatClient,
+            messages,
+            stageName: "Translator",
+            attempt: state.AttemptCount,
+            activity: activity,
+            stepLogger: _stepLogger,
+            cancellationToken: cancellationToken);
+
+        var translatedText = streamResult.Text.Trim();
 
         _stepLogger?.Invoke(new PipelineStepLog(
             Stage: "Translator",
             Summary: state.AttemptCount > 1 
-                ? $"Düzeltilmiş Çeviri Taslağı Üretildi (Döngü Denemesi: {state.AttemptCount})" 
-                : "İlk Çeviri Taslağı Üretildi",
+                ? $"Düzeltilmiş Çeviri Taslağı Üretildi ({streamResult.FormatSummary(state.AttemptCount)})" 
+                : $"İlk Çeviri Taslağı Üretildi ({streamResult.FormatSummary(state.AttemptCount)})",
             Content: translatedText,
             Attempt: state.AttemptCount));
 

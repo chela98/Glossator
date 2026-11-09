@@ -50,7 +50,7 @@ public sealed class GlossaryListCommand(SqliteGlossaryRepository repository) : A
             }
             else
             {
-                AnsiConsole.MarkupLine($"[bold yellow]⚠ Geçersiz politika filtresi: '{settings.Policy}'. Geçerli değerler: ProgressiveGloss, AlwaysEnglish, AlwaysTurkish[/]");
+                AnsiConsole.MarkupLine($"[bold yellow]Uyarı:[/] Geçersiz politika filtresi: '{settings.Policy}'. Geçerli değerler: ProgressiveGloss, AlwaysEnglish, AlwaysTurkish");
             }
         }
 
@@ -77,7 +77,7 @@ public sealed class GlossaryListCommand(SqliteGlossaryRepository repository) : A
         var pagedTerms = allTerms.Skip((pageNumber - 1) * pageSize).Take(pageSize).ToList();
 
         var table = new Table().Border(TableBorder.Rounded);
-        table.Title($"[bold cyan]📚 Glossator Sözlüğü (Toplam: {totalCount} terim | Sayfa: {pageNumber}/{totalPages})[/]");
+        table.Title($"[bold cyan]Glossator Sözlüğü (Toplam: {totalCount} terim | Sayfa: {pageNumber}/{totalPages})[/]");
         table.AddColumn(new TableColumn("[bold dim]ID[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]İngilizce Terim[/]"));
         table.AddColumn(new TableColumn("[bold]Türkçe Karşılık[/]"));
@@ -95,8 +95,8 @@ public sealed class GlossaryListCommand(SqliteGlossaryRepository repository) : A
             };
 
             var reviewedBadge = term.IsReviewed
-                ? "[bold green]✔[/]"
-                : "[bold yellow]⚠[/]";
+                ? "[bold green]ONAYLI[/]"
+                : "[bold yellow]TASLAK[/]";
 
             table.AddRow(
                 $"[dim]{term.Id}[/]",

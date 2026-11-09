@@ -1,5 +1,6 @@
 using System.ClientModel;
 using Glossator.AI.Configuration;
+using Glossator.AI.RateLimiting;
 using Glossator.AI.Workflows;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -41,44 +42,47 @@ public static class AiServiceExtensions
 
     private static void RegisterAgentChatClient(IServiceCollection services, string agentRoleKey)
     {
-        services.AddKeyedSingleton<IChatClient>(agentRoleKey, (sp, key) =>
+        services.AddKeyedTransient<IChatClient>(agentRoleKey, (sp, key) =>
         {
             var options = sp.GetRequiredService<IOptions<GlossatorAiOptions>>().Value;
+            var (providerKey, providerConfig, modelId) = options.ResolveAgent(agentRoleKey);
 
-            if (!options.Agents.TryGetValue(agentRoleKey, out var agentConfig))
+            if (providerConfig == null || string.IsNullOrWhiteSpace(providerConfig.Endpoint))
             {
-                throw new InvalidOperationException($"'{agentRoleKey}' ajanı için yapılandırma bulunamadı. Lütfen appsettings.json dosyasını kontrol edin.");
+                throw new InvalidOperationException($"'{agentRoleKey}' ajanı için geçerli bir AI sağlayıcısı (Endpoint) bulunamadı. Lütfen appsettings.json dosyasını kontrol edin.");
             }
 
-            if (!options.Providers.TryGetValue(agentConfig.Provider, out var providerConfig))
-            {
-                throw new InvalidOperationException($"'{agentConfig.Provider}' sağlayıcısı bulunamadı (Ajan: {agentRoleKey}). Lütfen Providers listesini kontrol edin.");
-            }
+            options.Agents.TryGetValue(agentRoleKey, out var agentConfig);
+
+            var apiKey = string.IsNullOrWhiteSpace(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("YOUR_")
+                ? (providerConfig.Endpoint.Contains("localhost") || providerConfig.Endpoint.Contains("127.0.0.1") ? "dummy-local-key" : providerConfig.ApiKey)
+                : providerConfig.ApiKey;
 
             var clientOptions = new OpenAIClientOptions
             {
                 Endpoint = new Uri(providerConfig.Endpoint),
-                NetworkTimeout = TimeSpan.FromSeconds(600),
-                RetryPolicy = new System.ClientModel.Primitives.ClientRetryPolicy(maxRetries: 1)
+                NetworkTimeout = TimeSpan.FromSeconds(180),
+                RetryPolicy = new System.ClientModel.Primitives.ClientRetryPolicy(maxRetries: 0)
             };
 
             var openAiClient = new OpenAIClient(
-                new ApiKeyCredential(providerConfig.ApiKey),
+                new ApiKeyCredential(apiKey),
                 clientOptions);
 
-            var innerClient = openAiClient.GetChatClient(agentConfig.ModelId).AsIChatClient();
+            var innerClient = openAiClient.GetChatClient(modelId).AsIChatClient();
 
             // .NET 10 Pipeline Builder
             var builder = innerClient.AsBuilder();
 
             // Eğer reasoning_effort tanımlanmışsa (örn: "none"), middleware ile ChatOptions içine enjekte et
-            if (!string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
+            if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
             {
+                var effort = agentConfig.ReasoningEffort;
                 builder.Use((messages, chatOptions, next, ct) =>
                 {
                     chatOptions ??= new ChatOptions();
                     chatOptions.AdditionalProperties ??= new AdditionalPropertiesDictionary();
-                    chatOptions.AdditionalProperties["reasoning_effort"] = agentConfig.ReasoningEffort;
+                    chatOptions.AdditionalProperties["reasoning_effort"] = effort;
                     return next(messages, chatOptions, ct);
                 });
             }
@@ -93,7 +97,14 @@ public static class AiServiceExtensions
             var rateLimiter = sp.GetService<System.Threading.RateLimiting.RateLimiter>();
             if (rateLimiter != null)
             {
-                builder.Use(c => new Glossator.AI.RateLimiting.RateLimitingChatClient(c, rateLimiter));
+                builder.UseRateLimiting(rateLimiter);
+            }
+
+            // Microsoft.Extensions.AI Resmi Loglama Ara Yazılımı (Aspire Dashboard Canlı İstek/Yanıt ve Token Akışı)
+            var loggerFactory = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
+            if (loggerFactory != null)
+            {
+                builder.UseLogging(loggerFactory);
             }
 
             return builder
@@ -110,6 +121,7 @@ public static class AiServiceExtensions
         var translator = services.GetRequiredKeyedService<IChatClient>(KeyTranslator);
         var reviewer = services.GetRequiredKeyedService<IChatClient>(KeyReviewer);
         var postProcessor = services.GetRequiredService<Glossator.Core.Rules.TermGlossingPostProcessor>();
+        var logger = services.GetService<Microsoft.Extensions.Logging.ILogger<BookLocalizationPipeline>>();
 
         var stylePrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("StyleAnalystPrompt.md", cancellationToken);
         var translatorPrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("TranslatorPrompt.md", cancellationToken);
@@ -122,6 +134,7 @@ public static class AiServiceExtensions
             postProcessor,
             stylePrompt,
             translatorPrompt,
-            reviewerPrompt);
+            reviewerPrompt,
+            logger);
     }
-}
+}

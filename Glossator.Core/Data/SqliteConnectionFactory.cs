@@ -6,7 +6,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
 {
     private readonly string _connectionString;
     private readonly SemaphoreSlim _initLock = new(1, 1);
-    private bool _initialized;
+    private volatile bool _initialized;
 
     public string ConnectionString => _connectionString;
 
@@ -104,6 +104,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
                 CREATE INDEX IF NOT EXISTS idx_terms_reviewed ON Terms(IsReviewed);
 
                 CREATE TABLE IF NOT EXISTS SegmentCheckpoints (
+                    BookId          TEXT NOT NULL DEFAULT 'default',
                     ChapterFile     TEXT NOT NULL,
                     SegmentIndex    INTEGER NOT NULL,
                     OriginalHash    TEXT NOT NULL,
@@ -112,14 +113,60 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
                     TranslatedText  TEXT NOT NULL,
                     StageStatus     TEXT NOT NULL,
                     UpdatedAt       TEXT NOT NULL,
-                    PRIMARY KEY (ChapterFile, SegmentIndex)
+                    PRIMARY KEY (BookId, ChapterFile, SegmentIndex)
                 );
-                CREATE INDEX IF NOT EXISTS idx_checkpoints_chapter ON SegmentCheckpoints(ChapterFile);
                 """;
 
             await using var schemaCmd = connection.CreateCommand();
             schemaCmd.CommandText = ddl;
             await schemaCmd.ExecuteNonQueryAsync(cancellationToken);
+
+            // Geriye dönük uyumluluk: Eğer SegmentCheckpoints tablosunda BookId kolonu yoksa otomatik taşı
+            await using var checkColCmd = connection.CreateCommand();
+            checkColCmd.CommandText = "PRAGMA table_info(SegmentCheckpoints);";
+            await using var reader = await checkColCmd.ExecuteReaderAsync(cancellationToken);
+            var hasBookId = false;
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var colName = reader.GetString(1);
+                if (colName.Equals("BookId", StringComparison.OrdinalIgnoreCase))
+                {
+                    hasBookId = true;
+                    break;
+                }
+            }
+            await reader.CloseAsync();
+
+            if (!hasBookId)
+            {
+                const string migrateDdl = """
+                    CREATE TABLE IF NOT EXISTS SegmentCheckpoints_Migrated (
+                        BookId          TEXT NOT NULL DEFAULT 'default',
+                        ChapterFile     TEXT NOT NULL,
+                        SegmentIndex    INTEGER NOT NULL,
+                        OriginalHash    TEXT NOT NULL,
+                        TagName         TEXT NOT NULL,
+                        OriginalText    TEXT NOT NULL,
+                        TranslatedText  TEXT NOT NULL,
+                        StageStatus     TEXT NOT NULL,
+                        UpdatedAt       TEXT NOT NULL,
+                        PRIMARY KEY (BookId, ChapterFile, SegmentIndex)
+                    );
+                    INSERT OR IGNORE INTO SegmentCheckpoints_Migrated (BookId, ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt)
+                    SELECT 'default', ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt
+                    FROM SegmentCheckpoints;
+                    DROP TABLE SegmentCheckpoints;
+                    ALTER TABLE SegmentCheckpoints_Migrated RENAME TO SegmentCheckpoints;
+                    """;
+                await using var migrateCmd = connection.CreateCommand();
+                migrateCmd.CommandText = migrateDdl;
+                await migrateCmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            // BookId kolonu garanti edildikten sonra index oluşturulur
+            await using var indexCmd = connection.CreateCommand();
+            indexCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_checkpoints_book_chapter ON SegmentCheckpoints(BookId, ChapterFile);";
+            await indexCmd.ExecuteNonQueryAsync(cancellationToken);
 
             _initialized = true;
         }

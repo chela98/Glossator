@@ -5,8 +5,8 @@ using Glossator.Core.Models.Glossary;
 
 public enum TermFormatDecision
 {
-    Hybrid,      // 1 ve 2. kullanım: Türkçe (İngilizce)
-    PureTurkish, // 3 ve sonrası: Yalnızca Türkçe
+    Hybrid,      // 1. kullanım: Türkçe (İngilizce)
+    PureTurkish, // 2 ve sonrası: Yalnızca Türkçe
     EnglishOnly  // Sektör jargonu: AlwaysEnglish
 }
 
@@ -50,8 +50,8 @@ public sealed class TermUsageTracker(string initialScopeId = "default")
             1,
             static (_, count) => count + 1);
 
-        // 1 ve 2. geçişte HİBRİT "Türkçe (İngilizce)", 3 ve sonrasında SAF TÜRKÇE
-        return currentCount <= 2
+        // 1. geçişte HİBRİT "Türkçe (İngilizce)", 2 ve sonrasında SAF TÜRKÇE
+        return currentCount <= 1
             ? TermFormatDecision.Hybrid
             : TermFormatDecision.PureTurkish;
     }

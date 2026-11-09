@@ -31,7 +31,7 @@ public sealed class GlossarySearchCommand(SqliteGlossaryRepository repository) :
         }
 
         var table = new Table().Border(TableBorder.Rounded);
-        table.Title($"[bold cyan]🔍 Arama Sonuçları: '{Markup.Escape(settings.Query)}' ({results.Count} Eşleşme)[/]");
+        table.Title($"[bold cyan]Arama Sonuçları: '{Markup.Escape(settings.Query)}' ({results.Count} Eşleşme)[/]");
         table.AddColumn(new TableColumn("[bold dim]ID[/]").RightAligned());
         table.AddColumn(new TableColumn("[bold]İngilizce Terim[/]"));
         table.AddColumn(new TableColumn("[bold]Türkçe Karşılık[/]"));
@@ -49,8 +49,8 @@ public sealed class GlossarySearchCommand(SqliteGlossaryRepository repository) :
             };
 
             var reviewedBadge = term.IsReviewed
-                ? "[bold green]✔[/]"
-                : "[bold yellow]⚠[/]";
+                ? "[bold green]ONAYLI[/]"
+                : "[bold yellow]TASLAK[/]";
 
             table.AddRow(
                 $"[dim]{term.Id}[/]",

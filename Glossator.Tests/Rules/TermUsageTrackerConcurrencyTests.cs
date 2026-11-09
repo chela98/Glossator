@@ -1,8 +1,8 @@
+namespace Glossator.Tests.Rules;
+
 using Glossator.Core.Models.Glossary;
 using Glossator.Core.Rules;
 using Xunit;
-
-namespace Glossator.Tests.Rules;
 
 public class TermUsageTrackerConcurrencyTests
 {
@@ -29,11 +29,54 @@ public class TermUsageTrackerConcurrencyTests
         // Toplam sayacın tam olarak 50 olduğunu doğrula (Hiçbir race condition kaybolmadı)
         Assert.Equal(50, tracker.GetCurrentCount("Multi-Agent Systems"));
 
-        // İlk 2 kullanım Hybrid, sonraki 48 kullanım PureTurkish olmalı
+        // İlk kullanım Hybrid, sonraki 49 kullanım PureTurkish olmalı
         var hybridCount = decisions.Count(d => d == TermFormatDecision.Hybrid);
         var turkishCount = decisions.Count(d => d == TermFormatDecision.PureTurkish);
 
-        Assert.Equal(2, hybridCount);
-        Assert.Equal(48, turkishCount);
+        Assert.Equal(1, hybridCount);
+        Assert.Equal(49, turkishCount);
+    }
+
+    [Fact]
+    public async Task TermUsageTracker_UnderMultipleConcurrentTermsAndPolicies_EvaluatesCorrectly()
+    {
+        var tracker = new TermUsageTracker("mixed_chapter.html");
+
+        var progressiveTerm = new GlossaryEntry
+        {
+            EnglishTerm = "Neural Network",
+            TurkishTerm = "Yapay Sinir Ağı",
+            Policy = GlossingPolicy.ProgressiveGloss
+        };
+        var englishOnlyTerm = new GlossaryEntry
+        {
+            EnglishTerm = "LLM",
+            Policy = GlossingPolicy.AlwaysEnglish
+        };
+        var turkishOnlyTerm = new GlossaryEntry
+        {
+            EnglishTerm = "Database",
+            TurkishTerm = "Veritabanı",
+            Policy = GlossingPolicy.AlwaysTurkish
+        };
+
+        const int iterations = 30;
+
+        var tasks = Enumerable.Range(0, iterations).Select(_ => Task.Run(() =>
+        {
+            var d1 = tracker.RecordUsage(progressiveTerm);
+            var d2 = tracker.RecordUsage(englishOnlyTerm);
+            var d3 = tracker.RecordUsage(turkishOnlyTerm);
+
+            Assert.Equal(TermFormatDecision.EnglishOnly, d2);
+            Assert.Equal(TermFormatDecision.PureTurkish, d3);
+            return d1;
+        })).ToArray();
+
+        var progressiveDecisions = await Task.WhenAll(tasks);
+
+        Assert.Equal(iterations, tracker.GetCurrentCount("Neural Network"));
+        Assert.Equal(1, progressiveDecisions.Count(d => d == TermFormatDecision.Hybrid));
+        Assert.Equal(iterations - 1, progressiveDecisions.Count(d => d == TermFormatDecision.PureTurkish));
     }
 }

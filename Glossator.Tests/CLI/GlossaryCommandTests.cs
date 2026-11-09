@@ -1,11 +1,12 @@
+namespace Glossator.Tests.CLI;
+
+using Glossator.Cli.Commands.Glossary;
 using Glossator.Core.Data;
 using Glossator.Core.Glossary;
 using Glossator.Core.Models.Glossary;
 using Glossator.Core.Serialization;
 using Microsoft.Data.Sqlite;
 using Xunit;
-
-namespace Glossator.Tests.CLI;
 
 public class GlossaryCommandTests : IDisposable
 {
@@ -17,24 +18,33 @@ public class GlossaryCommandTests : IDisposable
     {
         _dbPath = Path.Combine(Path.GetTempPath(), $"glossator_cli_test_{Guid.NewGuid():N}.db");
         _connectionFactory = new SqliteConnectionFactory(_dbPath);
+        _connectionFactory.InitializeDatabaseAsync().GetAwaiter().GetResult();
         _repository = new SqliteGlossaryRepository(_connectionFactory);
+    }
 
-        using var conn = _connectionFactory.CreateOpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS Terms (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                EnglishTerm TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                TurkishTerm TEXT,
-                EnglishDefinition TEXT,
-                Policy INTEGER NOT NULL DEFAULT 0,
-                IsReviewed INTEGER NOT NULL DEFAULT 0,
-                SourceBook TEXT,
-                CreatedAt TEXT NOT NULL,
-                UpdatedAt TEXT NOT NULL
-            );
-            """;
-        cmd.ExecuteNonQuery();
+    [Fact]
+    public async Task GlossaryAddCommand_ExecutesSuccessfullyAndPersistsEntry()
+    {
+        var command = new GlossaryAddCommand(_repository);
+        var settings = new GlossaryAddSettings
+        {
+            EnglishTerm = "fine-tuning",
+            TurkishTerm = "ince ayar",
+            Policy = "ProgressiveGloss",
+            Definition = "Model adaptation method",
+            Reviewed = true,
+            Source = "Deep Learning Book"
+        };
+
+        var exitCode = await command.ExecuteAsync(null!, settings, CancellationToken.None);
+        Assert.Equal(0, exitCode);
+
+        var saved = await _repository.GetTermByEnglishAsync("fine-tuning");
+        Assert.NotNull(saved);
+        Assert.Equal("ince ayar", saved.TurkishTerm);
+        Assert.Equal(GlossingPolicy.ProgressiveGloss, saved.Policy);
+        Assert.True(saved.IsReviewed);
+        Assert.Equal("Deep Learning Book", saved.SourceBook);
     }
 
     [Fact]
@@ -58,55 +68,61 @@ public class GlossaryCommandTests : IDisposable
         Assert.True(retrieved.IsReviewed);
 
         // Update
-        retrieved.TurkishTerm = "Özerk Ajan";
-        await _repository.AddOrUpdateTermAsync(retrieved);
+        entry.TurkishTerm = "Özerk Ajan";
+        entry.Policy = GlossingPolicy.AlwaysTurkish;
+        await _repository.AddOrUpdateTermAsync(entry);
 
-        var updated = await _repository.GetTermByIdAsync(retrieved.Id);
+        var updated = await _repository.GetTermByEnglishAsync("Autonomous Agent");
         Assert.NotNull(updated);
         Assert.Equal("Özerk Ajan", updated.TurkishTerm);
+        Assert.Equal(GlossingPolicy.AlwaysTurkish, updated.Policy);
     }
 
     [Fact]
-    public async Task SearchTermsAsync_FindsMatchesInEnglishAndTurkish()
+    public async Task UpdateTermReview_WhenTurkishTermNull_PreservesExistingTurkishTranslation()
     {
-        await _repository.AddOrUpdateTermAsync(new GlossaryEntry
+        // Arrange
+        var entry = new GlossaryEntry
         {
-            EnglishTerm = "Deep Reinforcement Learning",
-            TurkishTerm = "Derin Pekiştirmeli Öğrenme",
-            Policy = GlossingPolicy.ProgressiveGloss
-        });
+            EnglishTerm = "Neural Network",
+            TurkishTerm = "Yapay Sinir Ağı",
+            Policy = GlossingPolicy.ProgressiveGloss,
+            IsReviewed = false
+        };
 
-        await _repository.AddOrUpdateTermAsync(new GlossaryEntry
-        {
-            EnglishTerm = "Supervised Learning",
-            TurkishTerm = "Gözetimli Öğrenme",
-            Policy = GlossingPolicy.AlwaysTurkish
-        });
+        await _repository.AddOrUpdateTermAsync(entry);
+        var inserted = await _repository.GetTermByEnglishAsync("Neural Network");
+        Assert.NotNull(inserted);
 
-        var searchEn = await _repository.SearchTermsAsync("Reinforcement");
-        Assert.Single(searchEn);
-        Assert.Equal("Deep Reinforcement Learning", searchEn[0].EnglishTerm);
+        // Act: Kullanıcı sadece politikayı değiştirdi, türkçe terim parametresi null bırakıldı
+        _repository.UpdateTermReview(inserted.Id, GlossingPolicy.AlwaysEnglish, turkishTerm: null);
 
-        var searchTr = await _repository.SearchTermsAsync("Öğrenme");
-        Assert.Equal(2, searchTr.Count);
+        // Assert: Mevcut Türkçe karşılık silinmemeli, korunmalıdır!
+        var afterReview = await _repository.GetTermByIdAsync(inserted.Id);
+        Assert.NotNull(afterReview);
+        Assert.Equal("Yapay Sinir Ağı", afterReview.TurkishTerm);
+        Assert.Equal(GlossingPolicy.AlwaysEnglish, afterReview.Policy);
+        Assert.True(afterReview.IsReviewed);
     }
 
     [Fact]
     public async Task DeleteTermAsync_RemovesTermSuccessfully()
     {
-        await _repository.AddOrUpdateTermAsync(new GlossaryEntry
+        var term = new GlossaryEntry
         {
-            EnglishTerm = "Transient Term",
-            TurkishTerm = "Geçici Terim"
-        });
+            EnglishTerm = "Temp Term",
+            TurkishTerm = "Geçici Terim",
+            Policy = GlossingPolicy.ProgressiveGloss
+        };
 
-        var term = await _repository.GetTermByEnglishAsync("Transient Term");
-        Assert.NotNull(term);
+        await _repository.AddOrUpdateTermAsync(term);
+        var retrieved = await _repository.GetTermByEnglishAsync("Temp Term");
+        Assert.NotNull(retrieved);
 
-        var deleted = await _repository.DeleteTermAsync(term.Id);
+        var deleted = await _repository.DeleteTermAsync(retrieved.Id);
         Assert.True(deleted);
 
-        var check = await _repository.GetTermByIdAsync(term.Id);
+        var check = await _repository.GetTermByIdAsync(retrieved.Id);
         Assert.Null(check);
     }
 

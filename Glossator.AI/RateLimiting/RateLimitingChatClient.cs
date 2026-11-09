@@ -24,6 +24,23 @@ public sealed class RateLimitingChatClient(
 
         return await base.GetResponseAsync(messages, options, cancellationToken);
     }
+
+    public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        using var lease = await rateLimiter.AcquireAsync(permitCount: 1, cancellationToken);
+        if (!lease.IsAcquired)
+        {
+            throw new InvalidOperationException("Merkezi RateLimiter kuyruğundan izin alınamadı (İstek reddedildi).");
+        }
+
+        await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
+        {
+            yield return update;
+        }
+    }
 }
 
 public static class RateLimitingChatClientBuilderExtensions
