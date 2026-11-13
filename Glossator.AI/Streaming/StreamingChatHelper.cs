@@ -152,11 +152,15 @@ public static class StreamingChatHelper
             stopwatch.Stop();
 
             var nonStreamText = nonStreamingResp.Text?.Trim() ?? string.Empty;
+            var estimatedInTokens = messages.Sum(m => Math.Max(1L, (m.Text?.Length ?? 0) / 4));
+            var nonStreamInTokens = nonStreamingResp.Usage?.InputTokenCount ?? estimatedInTokens;
             var billedOutTokens = nonStreamingResp.Usage?.OutputTokenCount ?? Math.Max(1, nonStreamText.Length / 4);
             var textOutTokens = Math.Max(1, nonStreamText.Length / 4);
             var durationSec = Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
             var tps = textOutTokens / durationSec;
             var fallbackOverallTps = billedOutTokens / durationSec;
+
+            GlossatorDiagnostics.RecordStageUsage(stageName, nonStreamInTokens, billedOutTokens, textOutTokens);
 
             if (nonStreamingResp.Usage != null)
             {
@@ -214,10 +218,34 @@ public static class StreamingChatHelper
         }
 
         var fullText = sb.ToString();
-        var billedOutputTokens = lastUsage?.OutputTokenCount ?? estimatedTokenCount;
-        var textTokens = Math.Max(1, estimatedTokenCount > 0 ? estimatedTokenCount : (fullText.Length / 4));
-        var inputTokens = lastUsage?.InputTokenCount;
-        var totalTokens = lastUsage?.TotalTokenCount;
+        var textTokens = Math.Max(1L, fullText.Length > 0 ? (fullText.Length + 2) / 4 : estimatedTokenCount);
+        var estimatedInputTokens = messages.Sum(m => Math.Max(1L, (m.Text?.Length ?? 0) / 4));
+        var inputTokens = lastUsage?.InputTokenCount ?? estimatedInputTokens;
+        var rawOutputTokens = lastUsage?.OutputTokenCount ?? textTokens;
+        var totalTokens = lastUsage?.TotalTokenCount ?? (inputTokens + rawOutputTokens);
+
+        // Gemini ve OpenAI reasoning token tespiti:
+        // 1) OpenAI / MEAI AdditionalCounts["OutputTokenDetails.ReasoningTokenCount"]
+        // 2) Gemini total_tokens - prompt_tokens farkı (total > input + visible_output)
+        long explicitReasoningTokens = 0;
+        if (lastUsage?.AdditionalCounts != null &&
+            lastUsage.AdditionalCounts.TryGetValue("OutputTokenDetails.ReasoningTokenCount", out var rCount))
+        {
+            explicitReasoningTokens = rCount;
+        }
+
+        var billedOutputTokens = Math.Max(rawOutputTokens, totalTokens > inputTokens ? (totalTokens - inputTokens) : rawOutputTokens);
+        if (explicitReasoningTokens > 0 && billedOutputTokens < textTokens + explicitReasoningTokens)
+        {
+            billedOutputTokens = textTokens + explicitReasoningTokens;
+        }
+
+        var reasoningTokens = explicitReasoningTokens > 0
+            ? explicitReasoningTokens
+            : Math.Max(0, billedOutputTokens - textTokens);
+        var visibleTextTokens = explicitReasoningTokens > 0
+            ? Math.Max(1, billedOutputTokens - explicitReasoningTokens)
+            : textTokens;
 
         var totalDurationSec = Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
         var streamingDurationMs = ttftMs > 0 ? (stopwatch.ElapsedMilliseconds - ttftMs) : 0;
@@ -227,30 +255,32 @@ public static class StreamingChatHelper
             : totalDurationSec;
 
         // Metin Akış Hızı (Text TPS): Canlı ekrana basılan çeviri metninin hızı (~100 tok/s)
-        var textTps = textTokens / streamingDurationSec;
+        var textTps = visibleTextTokens / streamingDurationSec;
 
         // Genel Model Hızı (Overall Throughput): Düşünme (reasoning) dahil faturanın tüm süreye oranı (~90 tok/s)
         var overallTps = billedOutputTokens / totalDurationSec;
 
         // Telemetri ve OpenTelemetry Metrik Kayıtları
         GlossatorDiagnostics.TokensPerSecondHistogram.Record(textTps);
-        GlossatorDiagnostics.StreamedTokensCounter.Add(textTokens);
+        GlossatorDiagnostics.StreamedTokensCounter.Add(visibleTextTokens);
+        GlossatorDiagnostics.RecordStageUsage(stageName, inputTokens, billedOutputTokens, visibleTextTokens);
 
         activity?.SetTag("gen_ai.response.streaming", true);
         activity?.SetTag("gen_ai.response.ttft_ms", ttftMs >= 0 ? ttftMs : stopwatch.ElapsedMilliseconds);
         activity?.SetTag("gen_ai.response.tps", textTps);
         activity?.SetTag("gen_ai.response.overall_throughput", overallTps);
         if (billedOutputTokens > 0) activity?.SetTag("gen_ai.usage.output_tokens", billedOutputTokens);
-        activity?.SetTag("gen_ai.usage.text_tokens", textTokens);
-        if (inputTokens.HasValue) activity?.SetTag("gen_ai.usage.input_tokens", inputTokens.Value);
-        if (totalTokens.HasValue) activity?.SetTag("gen_ai.usage.total_tokens", totalTokens.Value);
+        activity?.SetTag("gen_ai.usage.text_tokens", visibleTextTokens);
+        activity?.SetTag("gen_ai.usage.reasoning_tokens", reasoningTokens);
+        activity?.SetTag("gen_ai.usage.input_tokens", inputTokens);
+        activity?.SetTag("gen_ai.usage.total_tokens", totalTokens);
 
         return new StreamingChatResult(
             Response: composedResponse,
             Text: fullText,
             TimeToFirstTokenMs: ttftMs >= 0 ? ttftMs : stopwatch.ElapsedMilliseconds,
             TokensPerSecond: textTps,
-            OutputTokens: textTokens,
+            OutputTokens: visibleTextTokens,
             BilledOutputTokens: billedOutputTokens,
             OverallThroughput: overallTps);
     }

@@ -124,15 +124,36 @@ public class SqliteGlossaryRepository
     }
 
     /// <summary>
+    /// LLMs gibi İngilizce çoğul takılı hatalı kayıtları, parantezli totoloji başlıklarını ve
+    /// unicode tire içeren mükerrer terimleri veritabanından temizler.
+    /// </summary>
+    public async Task<int> CleanupObsoleteTermsAsync(CancellationToken ct = default)
+    {
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        const string cleanupSql = """
+            DELETE FROM Terms WHERE EnglishTerm = 'LLMs';
+            DELETE FROM Terms WHERE EnglishTerm = 'RNNs';
+            DELETE FROM Terms WHERE EnglishTerm = 'developer agents agents';
+            DELETE FROM Terms WHERE EnglishTerm LIKE '%(%)%';
+            DELETE FROM Terms WHERE EnglishTerm LIKE '%‐%' OR EnglishTerm LIKE '%‑%';
+            """;
+        await using var cmd = new SqliteCommand(cleanupSql, connection);
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
     /// Sektör standardı temel terimlerin Türkçe karşılıklarını ve politikalarını asenkron olarak veritabanına işler.
     /// Kullanıcı tarafından elle düzenlenmiş (IsReviewed=1) terimleri ASLA ezmez.
     /// </summary>
     public async Task SeedDefaultTurkishTranslationsAsync(CancellationToken ct = default)
     {
+        await CleanupObsoleteTermsAsync(ct);
+
         await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
 
         var now = DateTime.UtcNow.ToString("o");
+
         var insertSql = """
             INSERT INTO Terms (EnglishTerm, TurkishTerm, Policy, IsReviewed, CreatedAt, UpdatedAt)
             VALUES (@EnglishTerm, @TurkishTerm, @Policy, 1, @Now, @Now)
@@ -249,6 +270,7 @@ public class SqliteGlossaryRepository
             INSERT INTO Terms (EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook, CreatedAt, UpdatedAt)
             VALUES (@EnglishTerm, @TurkishTerm, @EnglishDefinition, @Policy, @IsReviewed, @SourceBook, @Now, @Now)
             ON CONFLICT(EnglishTerm) DO UPDATE SET
+                EnglishTerm = excluded.EnglishTerm,
                 TurkishTerm = COALESCE(excluded.TurkishTerm, Terms.TurkishTerm),
                 EnglishDefinition = COALESCE(excluded.EnglishDefinition, Terms.EnglishDefinition),
                 Policy = CASE WHEN Terms.IsReviewed = 1 AND excluded.IsReviewed = 0 THEN Terms.Policy ELSE excluded.Policy END,
@@ -282,6 +304,7 @@ public class SqliteGlossaryRepository
             INSERT INTO Terms (EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook, CreatedAt, UpdatedAt)
             VALUES (@EnglishTerm, @TurkishTerm, @EnglishDefinition, @Policy, @IsReviewed, @SourceBook, @Now, @Now)
             ON CONFLICT(EnglishTerm) DO UPDATE SET
+                EnglishTerm = excluded.EnglishTerm,
                 TurkishTerm = COALESCE(excluded.TurkishTerm, Terms.TurkishTerm),
                 EnglishDefinition = COALESCE(excluded.EnglishDefinition, Terms.EnglishDefinition),
                 Policy = CASE WHEN Terms.IsReviewed = 1 AND excluded.IsReviewed = 0 THEN Terms.Policy ELSE excluded.Policy END,

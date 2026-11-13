@@ -314,18 +314,18 @@ public static class EpubPackager
 
     private static string SerializeXDocument(XDocument doc)
     {
-        var sb = new StringBuilder();
+        using var ms = new MemoryStream();
         var settings = new System.Xml.XmlWriterSettings
         {
             OmitXmlDeclaration = false,
             Encoding = Utf8WithoutBom,
             Indent = true
         };
-        using (var writer = System.Xml.XmlWriter.Create(sb, settings))
+        using (var writer = System.Xml.XmlWriter.Create(ms, settings))
         {
             doc.Save(writer);
         }
-        return sb.ToString();
+        return Utf8WithoutBom.GetString(ms.ToArray());
     }
 
     /// <summary>
@@ -611,6 +611,7 @@ public static class EpubPackager
         string targetLanguage = "tr")
     {
         if (string.IsNullOrWhiteSpace(htmlContent)) return htmlContent;
+        htmlContent = Parsing.HtmlSegmenter.NormalizeXhtmlContent(htmlContent);
         var doc = Parser.ParseDocument(htmlContent);
 
         // 1. Kök dil öznitelikleri (VoiceOver, heceleme ve sözlük motorları için)

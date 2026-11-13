@@ -52,6 +52,8 @@ if (args.Length > 0 && args[0].Equals("glossary", StringComparison.OrdinalIgnore
                 .WithDescription("Sözlüğe yeni bir terim ekler.");
             glossary.AddCommand<GlossaryEditCommand>("edit")
                 .WithDescription("Mevcut bir terimi günceller.");
+            glossary.AddCommand<GlossaryDeleteCommand>("delete")
+                .WithDescription("Sözlükten bir terimi siler.");
             glossary.AddCommand<GlossarySearchCommand>("search")
                 .WithDescription("Sözlükte terim arar.");
             glossary.AddCommand<GlossaryExportCommand>("export")
@@ -78,6 +80,7 @@ if (args.Length == 1 && (args[0].Equals("--help", StringComparison.OrdinalIgnore
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary list[/] [yellow][[--unreviewed]] [[--policy <pol>]] [[--search <q>]][/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary add[/] [yellow]-e <en> -t <tr> [[-p <pol>]] [[-d <tanım>]][/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary edit[/] [yellow][[-i <id>]] [[-e <en>]] [[-t <tr>]] [[-p <pol>]][/]");
+    AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary delete[/] [yellow]<terim-veya-id>[/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary search[/] [yellow]<kelime>[/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary export[/] [yellow][[glossary.yaml]] [[-f yaml|json]][/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]glossary import[/] [yellow]<glossary.yaml> [[-s kaynak]][/]");
@@ -335,8 +338,15 @@ try
     var repo = new SqliteGlossaryRepository(connectionFactory);
     var serializationService = new GlossarySerializationService();
 
-    // 1. Merkezi Master YAML ve Kitap Düzeyi Sözlük Senkronizasyonu (Master SSOT)
-    var masterYamlPath = GlossatorPaths.GetMasterGlossaryYamlPath();
+    // 1. Tek Doğruluk Kaynağı (Single Source of Truth): SQLite Veritabanı (~/.glossator/glossator.db)
+    // Eski ~/.glossator/master_glossary.yaml kalıntısı varsa temizle; YAML dosyaları yalnızca
+    // açıkça 'glossator glossary import' ve 'export' komutlarıyla kullanılır, DB'yi otomatik ezmez.
+    var legacyMasterYaml = Path.Combine(GlossatorPaths.GetGlossatorHomeDirectory(), "master_glossary.yaml");
+    if (File.Exists(legacyMasterYaml))
+    {
+        try { File.Delete(legacyMasterYaml); } catch { /* ignore */ }
+    }
+
     // Kitabın fiziksel konumunu belirle (.epub arşiviyse bulunduğu gerçek dizin, klasörse kendisi)
     var physicalBookDir = !string.IsNullOrWhiteSpace(package.SourceArchivePath) && File.Exists(package.SourceArchivePath)
         ? (Path.GetDirectoryName(Path.GetFullPath(package.SourceArchivePath)) ?? Environment.CurrentDirectory)
@@ -344,48 +354,8 @@ try
             ? (Path.GetDirectoryName(Path.GetFullPath(bookPath)) ?? Environment.CurrentDirectory)
             : (!string.IsNullOrWhiteSpace(package.RootDirectory) ? package.RootDirectory : Environment.CurrentDirectory));
 
-    // Öncelik: Gerçek kitap klasöründeki glossary.yaml / glossary.json -> Temp içindeki paket kökü
-    var candidatePhysicalYaml = Path.Combine(physicalBookDir, "glossary.yaml");
-    var candidatePhysicalJson = Path.Combine(physicalBookDir, "glossary.json");
-    var candidateTempYaml = !string.IsNullOrWhiteSpace(package.RootDirectory) ? Path.Combine(package.RootDirectory, "glossary.yaml") : null;
-    var candidateTempJson = !string.IsNullOrWhiteSpace(package.RootDirectory) ? Path.Combine(package.RootDirectory, "glossary.json") : null;
-
-    var bookYamlPath = File.Exists(candidatePhysicalYaml) ? candidatePhysicalYaml
-        : File.Exists(candidatePhysicalJson) ? candidatePhysicalJson
-        : (candidateTempYaml != null && File.Exists(candidateTempYaml)) ? candidateTempYaml
-        : (candidateTempJson != null && File.Exists(candidateTempJson)) ? candidateTempJson
-        : candidatePhysicalYaml;
-
-    if (File.Exists(masterYamlPath))
-    {
-        var masterTerms = await serializationService.ImportAsync(masterYamlPath, cts.Token);
-        if (masterTerms.Count > 0)
-        {
-            await repo.AddOrUpdateTermsBatchAsync(masterTerms, cts.Token);
-        }
-    }
-    else if (File.Exists(bookYamlPath))
-    {
-        var localTerms = await serializationService.ImportAsync(bookYamlPath, cts.Token);
-        if (localTerms.Count > 0)
-        {
-            await repo.AddOrUpdateTermsBatchAsync(localTerms, cts.Token);
-            await serializationService.ExportAsync(localTerms, masterYamlPath, SerializationFormat.Yaml, cts.Token);
-            AnsiConsole.MarkupLine($"[dim]Kitaba özel sözlük ([cyan]{Path.GetFileName(bookYamlPath)}[/]) yüklendi ve merkezi sözlükle senkronize edildi.[/]");
-        }
-    }
-    else
-    {
-        // Ne master_glossary.yaml ne de kitaba özel glossary.yaml mevcut (İlk Kurulum / Soğuk Başlangıç).
-        // Gömülü 246 terimlik çekirdek tohum sözlüğü (~/.glossator/master_glossary.yaml) otomatik oluştur ve veritabanına aktar:
-        await repo.SeedDefaultTurkishTranslationsAsync(cts.Token);
-        var seedTerms = await repo.GetAllTermsAsync(cts.Token);
-        if (seedTerms.Count > 0)
-        {
-            await serializationService.ExportAsync(seedTerms, masterYamlPath, SerializationFormat.Yaml, cts.Token);
-            AnsiConsole.MarkupLine($"[dim]Temel teknik sözlük ([cyan]{seedTerms.Count}[/] terim, [yellow]~/.glossator/master_glossary.yaml[/]) ilk kez oluşturuldu ve yüklendi.[/]");
-        }
-    }
+    // Veritabanı boşsa çekirdek terimleri yükler ve hatalı artık kayıtları temizler (mevcut onaylı terimlere dokunmaz)
+    await repo.SeedDefaultTurkishTranslationsAsync(cts.Token);
 
     // 2. Kitaba Özgü Yeni Terim Çıkarımı (Karantina Mimarisi: Master Sözlüğü korumak için ham terimleri kitaba özel dosyaya yazar)
     if (autoExtractTerms)

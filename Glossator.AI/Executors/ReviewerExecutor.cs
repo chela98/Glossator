@@ -121,6 +121,32 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
         // 3. ADIM: JSON PATCH AYRIŞTIRMA VE C# YAMA BİRLEŞTİRME (PATCH MERGER)
         // ─────────────────────────────────────────────────────────────────────────────
         var patchResult = ParseReviewerResponse(rawResponse);
+
+        // 1-SHOT SELF-REPAIR: Eğer JSON ayrıştırılamadıysa, Translator'ı cezalandırmadan önce
+        // Reviewer'a kendi yanıtını onarması için tek seferlik doğrudan fırsat ver.
+        if (patchResult == null)
+        {
+            _stepLogger?.Invoke(new PipelineStepLog(
+                Stage: "Reviewer",
+                Summary: "Geçersiz JSON Yanıtı -> Reviewer Self-Repair Başlatılıyor",
+                Content: "İlk redaksiyon yanıtı JSON olarak ayrıştırılamadı. Modelden çıktısını temiz JSON formatında onarması isteniyor...",
+                Attempt: state.AttemptCount));
+
+            patchResult = await TrySelfRepairJsonAsync(rawResponse, state.AttemptCount, activity, cancellationToken);
+            if (patchResult != null)
+            {
+                activity?.SetTag("review.self_repair", "succeeded");
+                _stepLogger?.Invoke(new PipelineStepLog(
+                    Stage: "Reviewer",
+                    Summary: "Self-Repair Başarılı: JSON Sözdizimi Onarıldı",
+                    Attempt: state.AttemptCount));
+            }
+            else
+            {
+                activity?.SetTag("review.self_repair", "failed");
+            }
+        }
+
         string finalApprovedText = state.CurrentTranslation;
 
         if (patchResult != null)
@@ -131,6 +157,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 if (state.AttemptCount < 3)
                 {
                     Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.RecordRejection();
                     activity?.SetTag("review.result", "rejected");
 
                     var feedback = !string.IsNullOrWhiteSpace(patchResult.Feedback)
@@ -154,6 +181,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 {
                     // 3. denemede de reddedildi: Artık Translator'a iade edilmeyecek (Limit tükendi)
                     Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.RecordRejection();
                     activity?.SetTag("review.result", "force_approved_after_exhaustion");
 
                     _stepLogger?.Invoke(new PipelineStepLog(
@@ -187,6 +215,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 else
                 {
                     Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerPatchesCounter.Add(appliedBlocks.Count);
+                    Glossator.AI.Diagnostics.GlossatorDiagnostics.RecordPatchesApplied(appliedBlocks.Count);
                     activity?.SetTag("review.result", "patched");
                     activity?.SetTag("review.patches_count", appliedBlocks.Count);
 
@@ -211,32 +240,18 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
         }
         else
         {
-            // Fallback: Model JSON formatında dönmediyse güvenle taslağı doğrudan onaylama, attempt < 3 ise iade et
-            if (state.AttemptCount < 3)
-            {
-                Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
-                activity?.SetTag("review.result", "rejected_invalid_json");
-
-                var feedback = "Redaksiyon yanıtı geçerli bir JSON formatında üretilemedi. Lütfen geçerli JSON formatında ve XML blok etiketlerini eksiksiz koruyarak yeniden üretiniz.";
-                _stepLogger?.Invoke(new PipelineStepLog(
-                    Stage: "Reviewer",
-                    Summary: "Geçersiz JSON Yanıtı -> Translator'a Döngüsel İade Ediliyor",
-                    Content: rawResponse,
-                    Attempt: state.AttemptCount));
-
-                return state with
-                {
-                    IsApproved = false,
-                    Feedback = feedback,
-                    AttemptCount = state.AttemptCount + 1
-                };
-            }
+            // Hem ilk yanıt hem de 1-Shot Self-Repair başarısız olduysa:
+            // Translator'ı ASLA 3.5 dakika cezalandırma! Translator'ın geçerli taslağını en iyi gayretle doğrudan onayla.
+            Glossator.AI.Diagnostics.GlossatorDiagnostics.ReviewerRejectionsCounter.Add(1);
+            activity?.SetTag("review.result", "fallback_json_repair_exhausted_translator_accepted");
 
             _stepLogger?.Invoke(new PipelineStepLog(
                 Stage: "Reviewer",
-                Summary: "Uyarı: 3. denemede de geçerli JSON üretilemedi, mevcut taslak zorunlu onaylandı",
+                Summary: "Uyarı: Redaksiyon yanıtı onarılamadı. Çevirmenin geçerli taslağı doğrudan onaylandı.",
                 Content: rawResponse,
                 Attempt: state.AttemptCount));
+
+            finalApprovedText = state.CurrentTranslation;
         }
 
         var approvedState = state with
@@ -253,7 +268,64 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
         return approvedState;
     }
 
-    private static ReviewerPatchResult? ParseReviewerResponse(string rawResponse)
+    private async Task<ReviewerPatchResult?> TrySelfRepairJsonAsync(
+        string brokenResponse,
+        int attempt,
+        System.Diagnostics.Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var repairPrompt = $$"""
+                The following redacting review response failed JSON syntax parsing (unescaped quotes or invalid formatting).
+                Repair it and return ONLY the valid raw JSON object matching the exact schema:
+                {
+                  "isApproved": true,
+                  "feedback": "...",
+                  "patches": [
+                    {
+                      "blockId": "025",
+                      "reason": "...",
+                      "fixedText": "..."
+                    }
+                  ]
+                }
+
+                [ORIGINAL BROKEN RESPONSE]:
+                {{brokenResponse}}
+                """;
+
+            var repairMessages = new List<ChatMessage>
+            {
+                new(ChatRole.System, "You are a JSON repair engine. Output ONLY valid raw JSON with properly escaped quotes and matching braces. Do not include markdown fences, comments, or any conversational text."),
+                new(ChatRole.User, repairPrompt)
+            };
+
+            var repairStream = await StreamingChatHelper.StreamResponseAsync(
+                _chatClient,
+                repairMessages,
+                stageName: "Reviewer",
+                attempt: attempt,
+                activity: activity,
+                stepLogger: _stepLogger,
+                cancellationToken: cancellationToken);
+
+            var repairedText = repairStream.Text.Trim();
+            return ParseReviewerResponse(repairedText);
+        }
+        catch (Exception ex)
+        {
+            _stepLogger?.Invoke(new PipelineStepLog(
+                Stage: "Reviewer",
+                Summary: $"Self-Repair İstisnası: {ex.Message}",
+                Content: ex.ToString(),
+                IsTransient: true));
+
+            return null;
+        }
+    }
+
+    internal static ReviewerPatchResult? ParseReviewerResponse(string rawResponse)
     {
         if (string.IsNullOrWhiteSpace(rawResponse)) return null;
 
@@ -276,6 +348,10 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             }
         }
 
+        // 2. HTML etiketleri içindeki kaçışsız çift tırnakları tek tırnağa normalleştir:
+        // Örn: <span class="customlink"><a href="https://..."> -> <span class='customlink'><a href='https://...'>
+        cleaned = Regex.Replace(cleaned, @"(?<=<[^>]*?)=\""([^\""<>]*?)\""", "='$1'");
+
         try
         {
             var options = new JsonSerializerOptions
@@ -286,6 +362,65 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 NumberHandling = JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.WriteAsString
             };
             return JsonSerializer.Deserialize<ReviewerPatchResult>(cleaned, options);
+        }
+        catch
+        {
+            // 3. Fallback: Regex-based Lenient Parser (JsonSerializer patlasa dahi patch'leri kurtar)
+            return TryRegexParseReviewerResponse(cleaned);
+        }
+    }
+
+    private static ReviewerPatchResult? TryRegexParseReviewerResponse(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+
+        var trimmed = text.Trim();
+        // Eğer JSON en dış süslü parantezle kapanmıyorsa kesilmiştir (repair gerekir)
+        if (!trimmed.EndsWith('}')) return null;
+
+        try
+        {
+            var isApprovedMatch = Regex.Match(trimmed, @"""isApproved""\s*:\s*(true|false)", RegexOptions.IgnoreCase);
+            if (!isApprovedMatch.Success) return null;
+
+            var isApproved = bool.Parse(isApprovedMatch.Groups[1].Value);
+            var feedbackMatch = Regex.Match(trimmed, @"""feedback""\s*:\s*""([\s\S]*?)""(?:\s*,\s*""patches""|\s*\})", RegexOptions.IgnoreCase);
+            var feedback = feedbackMatch.Success ? feedbackMatch.Groups[1].Value : null;
+
+            var patches = new List<BlockPatch>();
+            var patchMatches = Regex.Matches(trimmed, @"\{\s*""blockId""\s*:\s*""(?<id>\d+)""\s*,\s*""reason""\s*:\s*""(?<reason>[\s\S]*?)""\s*,\s*""fixedText""\s*:\s*""(?<text>[\s\S]*?)""\s*\}", RegexOptions.IgnoreCase);
+
+            foreach (Match m in patchMatches)
+            {
+                var blockId = m.Groups["id"].Value;
+                var reason = m.Groups["reason"].Value;
+                var fixedText = m.Groups["text"].Value;
+
+                if (!string.IsNullOrWhiteSpace(blockId) && !string.IsNullOrWhiteSpace(fixedText))
+                {
+                    patches.Add(new BlockPatch
+                    {
+                        BlockId = blockId,
+                        Reason = reason,
+                        FixedText = fixedText
+                    });
+                }
+            }
+
+            // Eğer metin içinde "patches" ve "[" geçiyor ama regex hiçbir patch yakalayamadıysa format bozuktur
+            if (trimmed.Contains("\"patches\"", StringComparison.OrdinalIgnoreCase) &&
+                Regex.IsMatch(trimmed, @"\[\s*\{") &&
+                patches.Count == 0)
+            {
+                return null;
+            }
+
+            return new ReviewerPatchResult
+            {
+                IsApproved = isApproved,
+                Feedback = feedback,
+                Patches = patches
+            };
         }
         catch
         {
@@ -352,6 +487,46 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
     private static List<string> FindMissingMasks(string original, string translation)
     {
         var missing = new List<string>();
+        var blockPattern = @"\[BLOK_0*(\d+)(?:\s*\|\s*TAG:\s*[^\]]+)?\]([\s\S]*?)\[/BLOK_0*\1\]";
+        var originalBlocks = Regex.Matches(original, blockPattern, RegexOptions.IgnoreCase);
+
+        if (originalBlocks.Count > 0)
+        {
+            var translationBlocks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match m in Regex.Matches(translation, blockPattern, RegexOptions.IgnoreCase))
+            {
+                var id = int.Parse(m.Groups[1].Value).ToString("D3");
+                translationBlocks.TryAdd(id, m.Groups[2].Value);
+            }
+
+            foreach (Match origBlock in originalBlocks)
+            {
+                var blockId = int.Parse(origBlock.Groups[1].Value).ToString("D3");
+                var origContent = origBlock.Groups[2].Value;
+                var maskMatches = Regex.Matches(origContent, @"⟦PH_\d+⟧|\[\[(INDEX|CODE)_\d+\]\]");
+                if (maskMatches.Count == 0) continue;
+
+                if (!translationBlocks.TryGetValue(blockId, out var transContent))
+                {
+                    foreach (Match m in maskMatches)
+                    {
+                        missing.Add($"[BLOK_{blockId}] {m.Value}");
+                    }
+                    continue;
+                }
+
+                foreach (Match m in maskMatches)
+                {
+                    if (!transContent.Contains(m.Value, StringComparison.Ordinal))
+                    {
+                        missing.Add($"[BLOK_{blockId}] {m.Value}");
+                    }
+                }
+            }
+
+            return missing;
+        }
+
         var matches = Regex.Matches(original, @"⟦PH_\d+⟧|\[\[(INDEX|CODE)_\d+\]\]");
         foreach (Match match in matches)
         {

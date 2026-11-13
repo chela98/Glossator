@@ -131,8 +131,8 @@ public class DynamicSectionGrouperTests
     [Fact]
     public void Group_WithSoftLimitAndSemanticTag_SplitsAtSemanticBoundary()
     {
-        // Arrange: 1.800 token'ı aşacak ama 2.500 hard limit'i aşmayacak kadar paragraf üret (5 x ~380 token = ~1.900 token)
-        var paragraphWords = string.Join(" ", Enumerable.Repeat("software architecture patterns", 95));
+        // Arrange: 2.000 soft limit'i aşacak ama 2.800 hard limit'i aşmayacak kadar paragraf üret (5 x ~425 token = ~2.125 token)
+        var paragraphWords = string.Join(" ", Enumerable.Repeat("software architecture patterns", 105));
         var segments = new List<HtmlSegment>();
 
         for (int i = 0; i < 5; i++)
@@ -162,14 +162,14 @@ public class DynamicSectionGrouperTests
         // Act
         var sections = HtmlSectionGrouper.Group(segments, "ch03");
 
-        // Assert: 1.800 soft limit aşılıp <h4> geldiğinde bölünmeli
+        // Assert: 2.000 soft limit aşılıp <h4> geldiğinde bölünmeli
         Assert.Equal(2, sections.Count);
         Assert.Equal(5, sections[0].Segments.Count);
         Assert.Equal(2, sections[1].Segments.Count);
     }
 
     [Fact]
-    public void Group_WhenExceedingMaxSegmentsPerSection_SplitsAt25Segments()
+    public void Group_WhenExceedingMaxSegmentsPerSection_SplitsAtMaxSegments()
     {
         // Arrange: 30 adet kısa paragraf
         var segments = new List<HtmlSegment>();
@@ -186,9 +186,9 @@ public class DynamicSectionGrouperTests
         // Act
         var sections = HtmlSectionGrouper.Group(segments, "ch04");
 
-        // Assert: Maksimum 25 segment sınırında bölünmeli (İlk bölümde 25, ikinci bölümde 5)
+        // Assert: Maksimum 28 segment sınırında bölünmeli (İlk bölümde 28, ikinci bölümde 2)
         Assert.Equal(2, sections.Count);
-        Assert.Equal(25, sections[0].Segments.Count);
-        Assert.Equal(5, sections[1].Segments.Count);
+        Assert.Equal(HtmlSectionGrouper.MaxSegmentsPerSection, sections[0].Segments.Count);
+        Assert.Equal(30 - HtmlSectionGrouper.MaxSegmentsPerSection, sections[1].Segments.Count);
     }
 }

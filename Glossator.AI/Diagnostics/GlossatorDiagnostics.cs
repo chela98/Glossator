@@ -1,7 +1,18 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
 namespace Glossator.AI.Diagnostics;
+
+public sealed class StageUsageStats
+{
+    public long Calls;
+    public long InputTokens;
+    public long BilledOutputTokens;
+    public long VisibleOutputTokens;
+
+    public long ReasoningTokens => Math.Max(0, BilledOutputTokens - VisibleOutputTokens);
+}
 
 public static class GlossatorDiagnostics
 {
@@ -37,4 +48,42 @@ public static class GlossatorDiagnostics
 
     public static readonly Counter<long> StreamedTokensCounter = 
         Meter.CreateCounter<long>("glossator.genai.tokens_streamed", "tokens", "Canlı akışla (SSE) başarıyla üretilen toplam token sayısı");
+
+    // Oturum Bazlı (Bölüm/Kitap Sonu Karnesi İçin) Thread-Safe Sayaçlar
+    private static readonly ConcurrentDictionary<string, StageUsageStats> _stageStats = new(StringComparer.OrdinalIgnoreCase);
+    private static long _sessionPatchesApplied;
+    private static long _sessionRejections;
+    private static long _sessionSectionsCompleted;
+    private static long _sessionChaptersCompleted;
+
+    public static long SessionPatchesApplied => Interlocked.Read(ref _sessionPatchesApplied);
+    public static long SessionRejections => Interlocked.Read(ref _sessionRejections);
+    public static long SessionSectionsCompleted => Interlocked.Read(ref _sessionSectionsCompleted);
+    public static long SessionChaptersCompleted => Interlocked.Read(ref _sessionChaptersCompleted);
+
+    public static void ResetSessionStats()
+    {
+        _stageStats.Clear();
+        Interlocked.Exchange(ref _sessionPatchesApplied, 0);
+        Interlocked.Exchange(ref _sessionRejections, 0);
+        Interlocked.Exchange(ref _sessionSectionsCompleted, 0);
+        Interlocked.Exchange(ref _sessionChaptersCompleted, 0);
+    }
+
+    public static void RecordStageUsage(string stageName, long inputTokens, long billedOutputTokens, long visibleOutputTokens)
+    {
+        var key = string.IsNullOrWhiteSpace(stageName) ? "Other" : stageName;
+        var stats = _stageStats.GetOrAdd(key, _ => new StageUsageStats());
+        Interlocked.Increment(ref stats.Calls);
+        Interlocked.Add(ref stats.InputTokens, Math.Max(0, inputTokens));
+        Interlocked.Add(ref stats.BilledOutputTokens, Math.Max(0, billedOutputTokens));
+        Interlocked.Add(ref stats.VisibleOutputTokens, Math.Max(0, visibleOutputTokens));
+    }
+
+    public static void RecordPatchesApplied(int count) => Interlocked.Add(ref _sessionPatchesApplied, count);
+    public static void RecordRejection() => Interlocked.Increment(ref _sessionRejections);
+    public static void RecordSectionCompleted() => Interlocked.Increment(ref _sessionSectionsCompleted);
+    public static void RecordChapterCompleted() => Interlocked.Increment(ref _sessionChaptersCompleted);
+
+    public static IReadOnlyDictionary<string, StageUsageStats> GetStageStatsSnapshot() => _stageStats;
 }

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using Glossator.AI.Diagnostics;
 using Glossator.AI.Extensions;
 using Glossator.AI.Workflows;
 using Glossator.Core.Data;
@@ -50,6 +52,11 @@ public sealed class ParallelLocalizationEngine(
         _logger.LogInformation("Starting ParallelLocalizationEngine with {ChapterCount} chapters (Concurrency={Concurrency}, Fresh={IsFresh}, TestMode={IsTestMode})",
             selectedChapters.Count, concurrency, isFresh, isTestMode);
 
+        GlossatorDiagnostics.ResetSessionStats();
+        var sessionStopwatch = Stopwatch.StartNew();
+
+        try
+        {
         await AnsiConsole.Progress()
             .AutoRefresh(true)
             .AutoClear(false)
@@ -208,6 +215,7 @@ public sealed class ParallelLocalizationEngine(
                             var shortTitle = sec.Title.Length > 45 ? sec.Title[..42] + "..." : sec.Title;
                             task.Description = $"[blue]{Markup.Escape(chapterFileName)}[/] | Sec {s + 1}/{targetSections.Count}: {Markup.Escape(shortTitle)}";
                             await pipeline.TranslateSectionAsync(sec, chapterStyleGuide, ct);
+                            GlossatorDiagnostics.RecordSectionCompleted();
 
                             // Segmentleri kuyruk üzerinden arka plan SQLite yazıcısına aktar
                             foreach (var seg in sec.Segments)
@@ -265,6 +273,7 @@ public sealed class ParallelLocalizationEngine(
                         }
 
                         Glossator.AI.Diagnostics.GlossatorDiagnostics.ChaptersTranslatedCounter.Add(1);
+                        GlossatorDiagnostics.RecordChapterCompleted();
                         _logger.LogInformation("OK: Chapter '{Chapter}' completed successfully ({SectionCount} sections).",
                             chapterFileName, targetSections.Count);
 
@@ -301,5 +310,119 @@ public sealed class ParallelLocalizationEngine(
                     }
                 });
             });
+        }
+        finally
+        {
+            sessionStopwatch.Stop();
+            var aiOpts = rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<Glossator.AI.Configuration.GlossatorAiOptions>>()?.Value;
+            RenderSessionReport(sessionStopwatch.Elapsed, aiOpts);
+        }
+    }
+
+    private static void RenderSessionReport(TimeSpan elapsed, Glossator.AI.Configuration.GlossatorAiOptions? aiOptions)
+    {
+        var snapshot = GlossatorDiagnostics.GetStageStatsSnapshot();
+        if (snapshot.Count == 0 && GlossatorDiagnostics.SessionSectionsCompleted == 0)
+        {
+            return;
+        }
+
+        const double usdToTry = 38.00;
+
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Cyan1)
+            .Title("[bold yellow]ÇEVİRİ SONU TOKEN VE MALİYET KARNESİ[/]")
+            .AddColumn(new TableColumn("[bold white]Ajan / Model[/]"))
+            .AddColumn(new TableColumn("[bold cyan]Çağrı[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold green]Girdi (Input)[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold blue]Görünür Çıktı[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold magenta1]Düşünme (Reasoning)[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold yellow]Fatura Çıktı[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold white]Maliyet (Gemini)[/]").RightAligned());
+
+        long totalCalls = 0;
+        long totalIn = 0;
+        long totalVisibleOut = 0;
+        long totalReasoning = 0;
+        long totalBilledOut = 0;
+        double grandTotalUsd = 0.0;
+
+        string[] orderedStages = ["StyleAnalyst", "Translator", "Reviewer"];
+        var allKeys = orderedStages
+            .Where(k => snapshot.ContainsKey(k))
+            .Concat(snapshot.Keys.Where(k => !orderedStages.Contains(k, StringComparer.OrdinalIgnoreCase)))
+            .ToList();
+
+        foreach (var stage in allKeys)
+        {
+            var s = snapshot[stage];
+            var calls = Interlocked.Read(ref s.Calls);
+            var inTok = Interlocked.Read(ref s.InputTokens);
+            var visOut = Interlocked.Read(ref s.VisibleOutputTokens);
+            var billedOut = Interlocked.Read(ref s.BilledOutputTokens);
+            var reasonTok = Math.Max(0, billedOut - visOut);
+
+            totalCalls += calls;
+            totalIn += inTok;
+            totalVisibleOut += visOut;
+            totalReasoning += reasonTok;
+            totalBilledOut += billedOut;
+
+            var (provName, modelId, inRateUsd, outRateUsd, isFree) = aiOptions != null
+                ? aiOptions.ResolveStagePricing(stage)
+                : ("Gemini", "gemini-2.5-flash", 0.30, 2.50, false);
+
+            var stageUsd = isFree
+                ? 0.0
+                : (inTok / 1_000_000.0 * inRateUsd) + (billedOut / 1_000_000.0 * outRateUsd);
+            var stageTry = stageUsd * usdToTry;
+            grandTotalUsd += stageUsd;
+
+            var stageLabel = $"[bold]{Markup.Escape(stage)}[/] [dim]({Markup.Escape(provName)}: {Markup.Escape(modelId)})[/]";
+            var costLabel = isFree
+                ? $"[green]$0.0000[/] [dim](Ücretsiz)[/]"
+                : $"${stageUsd:F4} [dim](~{stageTry:F2} ₺)[/]";
+
+            table.AddRow(
+                stageLabel,
+                $"{calls:N0}",
+                $"{inTok:N0}",
+                $"{visOut:N0}",
+                reasonTok > 0 ? $"{reasonTok:N0}" : "[dim]0[/]",
+                $"{billedOut:N0}",
+                costLabel);
+        }
+
+        var grandTotalTry = grandTotalUsd * usdToTry;
+
+        table.AddEmptyRow();
+        table.AddRow(
+            "[bold yellow]TOPLAM[/]",
+            $"[bold cyan]{totalCalls:N0}[/]",
+            $"[bold green]{totalIn:N0}[/]",
+            $"[bold blue]{totalVisibleOut:N0}[/]",
+            $"[bold magenta1]{totalReasoning:N0}[/]",
+            $"[bold yellow]{totalBilledOut:N0}[/]",
+            $"[bold green]${grandTotalUsd:F4} (~{grandTotalTry:F2} ₺)[/]");
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(table);
+
+        var elapsedFormatted = elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours:D2}:{elapsed:mm\\:ss}"
+            : $"{elapsed:mm\\:ss}";
+
+        var summaryPanel = new Panel(
+            new Markup(
+                $"[bold white]Tamamlanan Bölüm:[/] [green]{GlossatorDiagnostics.SessionChaptersCompleted}[/]  |  " +
+                $"[bold white]Çevrilen Kesit (Section):[/] [cyan]{GlossatorDiagnostics.SessionSectionsCompleted}[/]  |  " +
+                $"[bold white]Reviewer Nokta Atışı Yama:[/] [yellow]{GlossatorDiagnostics.SessionPatchesApplied} blok[/]  |  " +
+                $"[bold white]Tam İade (Ret):[/] [red]{GlossatorDiagnostics.SessionRejections}[/]  |  " +
+                $"[bold white]Süre:[/] [white]{elapsedFormatted}[/]"))
+            .Header("[bold cyan]Redaksiyon ve Performans Özeti[/]")
+            .BorderColor(Color.Grey);
+
+        AnsiConsole.Write(summaryPanel);
     }
 }

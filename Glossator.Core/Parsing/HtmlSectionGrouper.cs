@@ -12,22 +12,22 @@ public static class HtmlSectionGrouper
     /// LLM prompt'u için hedeflenen minimum token alt eşiği (smart batching tabanı).
     /// h2 veya h3 başlığı gelse dahi mevcut sepette en az bu kadar token birikmeden bölünme yapılmaz.
     /// </summary>
-    public const int MinTokenLimit = 800;
+    public const int MinTokenLimit = 1200;
 
     /// <summary>
     /// LLM prompt'u için hedeflenen ideal token alt eşiği (soft limit).
     /// </summary>
-    public const int SoftTokenLimit = 1800;
+    public const int SoftTokenLimit = 2000;
 
     /// <summary>
     /// LLM yanıt kesilmesini ve context penceresi taşmasını önleyen zorunlu üst token eşiği (hard limit).
     /// </summary>
-    public const int HardTokenLimit = 2500;
+    public const int HardTokenLimit = 2800;
 
     /// <summary>
-    /// Bir section içinde tutulabilecek maksimum segment sayısı.
+    /// Bir section içinde tutulabilecek maksimum segment sayısı (Altın Oran: 28 blok).
     /// </summary>
-    public const int MaxSegmentsPerSection = 25;
+    public const int MaxSegmentsPerSection = 28;
 
     private static readonly HashSet<string> SemanticSplitTags = new(StringComparer.OrdinalIgnoreCase)
     {

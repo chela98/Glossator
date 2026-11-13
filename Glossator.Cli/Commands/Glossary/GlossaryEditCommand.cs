@@ -1,6 +1,8 @@
 using System.ComponentModel;
+using Glossator.Core.Data;
 using Glossator.Core.Glossary;
 using Glossator.Core.Models.Glossary;
+using Glossator.Core.Serialization;
 using Spectre.Console;
 using Spectre.Console.Cli;
 

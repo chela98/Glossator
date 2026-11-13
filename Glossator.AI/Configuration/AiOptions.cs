@@ -85,4 +85,71 @@ public class GlossatorAiOptions
 
         return (selectedProviderName, selectedProvider, resolvedModel);
     }
+
+    /// <summary>
+    /// Aşama (stage) veya ajan adına göre sağlayıcıyı, modeli ve 1M token başına USD maliyetini çözümler.
+    /// Yalnızca Gemini modelleri ücretlendirilir; Evren API ve diğer sağlayıcılar ücretsiz ($0.00) kabul edilir.
+    /// </summary>
+    public (string ProviderName, string ModelId, double InputRatePerMillionUsd, double OutputRatePerMillionUsd, bool IsFree) ResolveStagePricing(string stageName)
+    {
+        var agentKey = stageName switch
+        {
+            var s when s.StartsWith("Style", StringComparison.OrdinalIgnoreCase) => "StyleAnalyst",
+            var s when s.StartsWith("Review", StringComparison.OrdinalIgnoreCase) => "Reviewer",
+            _ => "Translator"
+        };
+
+        var (providerName, provider, modelId) = ResolveAgent(agentKey);
+
+        var isGemini = providerName.Equals("Gemini", StringComparison.OrdinalIgnoreCase)
+                       || (provider?.Endpoint?.Contains("googleapis.com", StringComparison.OrdinalIgnoreCase) ?? false)
+                       || modelId.StartsWith("gemini", StringComparison.OrdinalIgnoreCase);
+
+        if (!isGemini)
+        {
+            return (providerName, modelId, 0.0, 0.0, true);
+        }
+
+        var (inRate, outRate) = GetGeminiModelRatesPerMillionUsd(modelId);
+        return (providerName, modelId, inRate, outRate, false);
+    }
+
+    /// <summary>
+    /// Google Gemini Developer API resmi model tarifesi ($ / 1M Token - Girdi ve Çıktı/Reasoning dahil).
+    /// </summary>
+    public static (double InputUsd, double OutputUsd) GetGeminiModelRatesPerMillionUsd(string modelId)
+    {
+        var m = (modelId ?? string.Empty).Trim().ToLowerInvariant();
+
+        // 1. Flash-Lite Ailesi (En ekonomik katman)
+        if (m.Contains("flash-lite"))
+        {
+            if (m.Contains("2.0") || m.Contains("1.5"))
+                return (0.075, 0.30);
+            if (m.Contains("2.5"))
+                return (0.10, 0.40);
+            // Gemini 3.x Flash-Lite (örn: gemini-3.1-flash-lite, gemini-3.5-flash-lite)
+            return (0.25, 1.50);
+        }
+
+        // 2. Pro Ailesi (Derin muhakeme katmanı)
+        if (m.Contains("pro"))
+        {
+            if (m.Contains("3.") || m.Contains("3-"))
+                return (2.00, 12.00);
+            // Gemini 1.5 Pro / 2.5 Pro
+            return (1.25, 10.00);
+        }
+
+        // 3. Standart Flash Ailesi (Hız/Kalite dengesi)
+        if (m.Contains("1.5"))
+            return (0.075, 0.30);
+        if (m.Contains("2.0"))
+            return (0.10, 0.40);
+        if (m.Contains("2.5"))
+            return (0.30, 2.50);
+
+        // Gemini 3.x Flash (örn: gemini-3-flash, gemini-3.5-flash, gemini-3.8-flash)
+        return (0.50, 3.00);
+    }
 }

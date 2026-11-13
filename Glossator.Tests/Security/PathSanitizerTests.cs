@@ -74,8 +74,8 @@ public class PathSanitizerTests
     [Fact]
     public void ResolveSafeOutputPath_WithExplicitPath_UsesExplicitPath()
     {
-        var input = @"C:\Books\Sample.epub";
-        var explicitOutput = @"D:\Exports\Final_Book.epub";
+        var input = Path.Combine(Path.GetTempPath(), "Books", "Sample.epub");
+        var explicitOutput = Path.Combine(Path.GetTempPath(), "Exports", "Final_Book.epub");
 
         var result = PathSanitizer.ResolveSafeOutputPath(input, explicitOutput, "Sample Title");
 

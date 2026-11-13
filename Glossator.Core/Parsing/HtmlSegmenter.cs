@@ -21,7 +21,7 @@ public static partial class HtmlSegmenter
         "p", "div", "pre", "table", "ul", "ol", "blockquote", "figure", "section", "article", "header", "footer"
     };
 
-    [GeneratedRegex(@"<(?<tag>a|span|abbr|sup|sub|em|strong|b|i)(?<attrs>(?:\s+[^>]*?)?)\s*/>", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"<(?<tag>a|span|abbr|sup|sub|em|strong|b|i|code|dfn|kbd|samp|var|small|mark)(?<attrs>(?:\s+[^>]*?)?)\s*/>", RegexOptions.IgnoreCase)]
     private static partial Regex SelfClosingInlineTagRegex();
 
     /// <summary>

@@ -33,8 +33,8 @@ terms:
     policy: AlwaysEnglish
     reviewed: true
 
-  - english: "LLMs"
-    turkish: "LLMs"
+  - english: "RAG"
+    turkish: "RAG"
     policy: AlwaysEnglish
     reviewed: true
 
@@ -161,12 +161,12 @@ terms:
   # ─────────────────────────────────────────────────────────────────────────────
   - english: "autonomous agent"
     turkish: "otonom ajan"
-    policy: ProgressiveGloss
+    policy: AlwaysTurkish
     reviewed: true
 
   - english: "autonomous agents"
     turkish: "otonom ajanlar"
-    policy: ProgressiveGloss
+    policy: AlwaysTurkish
     reviewed: true
 
   - english: "boilerplate"
@@ -216,7 +216,7 @@ terms:
 
   - english: "machine learning"
     turkish: "makine öğrenimi"
-    policy: ProgressiveGloss
+    policy: AlwaysTurkish
     reviewed: true
 
   - english: "prompt engineering"
@@ -225,18 +225,18 @@ terms:
     reviewed: true
 
   - english: "rate limiting"
-    turkish: "istek hız sınırlama"
+    turkish: "istek hızı sınırlandırma"
     policy: ProgressiveGloss
     reviewed: true
 
   - english: "vector database"
     turkish: "vektör veritabanı"
-    policy: ProgressiveGloss
+    policy: AlwaysTurkish
     reviewed: true
 
   - english: "vector databases"
     turkish: "vektör veritabanları"
-    policy: ProgressiveGloss
+    policy: AlwaysTurkish
     reviewed: true
 
   - english: "zero-shot learning"

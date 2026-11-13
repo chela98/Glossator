@@ -180,4 +180,65 @@ public class DomTreeWalkerMaskerTests
         Assert.Contains("<code class=\"python\">def hello(): pass</code>", restored);
         Assert.StartsWith("Bu fonksiyon selam verir.", restored);
     }
+
+    [Fact]
+    public void MaskElement_WithCustomLinkCitation_MasksOuterSpanAndRestoresAccurately()
+    {
+        // Arrange: O'Reilly akademik atıf bağlantısı: <span class="customlink"><a href="...">Warfield, 2024</a></span>
+        var html = "<p>EyeLevel.ai (<span class=\"customlink\"><a href=\"https://oreil.ly/V_roj\">Warfield, 2024</a></span>) tarafından yapılan araştırma.</p>";
+        var doc = _parser.ParseDocument(html);
+        var p = doc.QuerySelector("p")!;
+
+        // Act
+        var (maskedText, tokens) = DomTreeWalkerMasker.Instance.MaskElement(p);
+
+        // Assert: Sadece dıştaki span.customlink tek bir token olarak maskelenmeli, içteki <a> ayrıca maskelenmemeli
+        Assert.Single(tokens);
+        Assert.Equal("⟦PH_000001⟧", tokens[0].Token);
+        Assert.Contains("Warfield, 2024", tokens[0].OriginalMarkup);
+        Assert.Contains("https://oreil.ly/V_roj", tokens[0].OriginalMarkup);
+        Assert.Equal("EyeLevel.ai (⟦PH_000001⟧) tarafından yapılan araştırma.", maskedText);
+
+        // Geri yükleme (Unmask) testi
+        DomTreeWalkerMasker.Instance.UnmaskElement(p, maskedText, tokens);
+        Assert.Contains("<span class=\"customlink\"><a href=\"https://oreil.ly/V_roj\">Warfield, 2024</a></span>", p.InnerHtml);
+    }
+
+    [Fact]
+    public void MaskElement_WithExternalHyperlink_MasksDirectly()
+    {
+        // Arrange: Harici doğrudan web linki
+        var html = "<p>Daha fazla bilgi için <a href=\"https://example.com/docs\">Dokümantasyon</a> sayfasını ziyaret edin.</p>";
+        var doc = _parser.ParseDocument(html);
+        var p = doc.QuerySelector("p")!;
+
+        // Act
+        var (maskedText, tokens) = DomTreeWalkerMasker.Instance.MaskElement(p);
+
+        // Assert
+        Assert.Single(tokens);
+        Assert.Equal("⟦PH_000001⟧", tokens[0].Token);
+        Assert.Contains("https://example.com/docs", tokens[0].OriginalMarkup);
+        Assert.Equal("Daha fazla bilgi için ⟦PH_000001⟧ sayfasını ziyaret edin.", maskedText);
+    }
+
+    [Theory]
+    [InlineData("<a data-type=\"xref\" data-xrefstyle=\"select:labelnumber\" href=\"ch04.html#ch04\">4</a>", true)]
+    [InlineData("<a data-type=\"xref\" data-xrefstyle=\"select:labelnumber\" href=\"ch03.html#ch03\">3</a>, <a data-type=\"xref\" data-xrefstyle=\"select:labelnumber\" href=\"ch04.html#ch04\">4</a>", true)]
+    [InlineData("Cognee", true)]
+    [InlineData("Mem0", true)]
+    [InlineData("Zep", true)]
+    [InlineData("Neo4j", true)]
+    [InlineData("⟦PH_000001⟧Cognee", true)]
+    [InlineData("Performance", false)]
+    [InlineData("Cost", false)]
+    [InlineData("Modularity", false)]
+    [InlineData("Tip", false)]
+    [InlineData("Note", false)]
+    [InlineData("Summary", false)]
+    [InlineData("<a data-type=\"xref\" href=\"ch04.html#ch04\">Chapter&#160;4</a>", false)]
+    public void IsPureTechnicalOrPlaceholder_AccuratelyDistinguishesXrefNumbersAndBrandNamesFromTranslatableText(string input, bool expected)
+    {
+        Assert.Equal(expected, DomTreeWalkerMasker.IsPureTechnicalOrPlaceholder(input));
+    }
 }

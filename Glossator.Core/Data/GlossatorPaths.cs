@@ -42,11 +42,27 @@ public static class GlossatorPaths
     }
 
     /// <summary>
-    /// Tüm kitapların paylaştığı Git-dostu merkezi YAML sözlük dosya yolunu döner.
+    /// Uygulama veya çalışma dizininde bulunan yerel glossary.yaml dosya yolunu döner (varsa).
     /// </summary>
-    public static string GetMasterGlossaryYamlPath()
+    public static string? FindActiveLocalGlossaryYamlPath(string? bookDir = null)
     {
-        return Path.Combine(GetGlossatorHomeDirectory(), "master_glossary.yaml");
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(bookDir))
+        {
+            candidates.Add(Path.Combine(bookDir, "glossary.yaml"));
+        }
+        candidates.Add(Path.Combine(Environment.CurrentDirectory, "glossary.yaml"));
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "glossary.yaml"));
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return Path.GetFullPath(candidate);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

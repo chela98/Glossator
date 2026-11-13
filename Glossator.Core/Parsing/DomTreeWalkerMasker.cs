@@ -19,6 +19,23 @@ public sealed partial class DomTreeWalkerMasker
     [GeneratedRegex(@"[\[⟦{(]{1,2}\s*(?:PH|CODE|INDEX|VAR|MATH|SVG)[_\-\s]*(\d+)\s*[\]⟧})]{1,2}", RegexOptions.IgnoreCase)]
     private static partial Regex FuzzyPlaceholderRegex();
 
+    [GeneratedRegex(@"<[^>]+>|&[a-zA-Z0-9#]+;", RegexOptions.IgnoreCase)]
+    private static partial Regex HtmlTagOrEntityRegex();
+
+    // Tek kelimelik olduğunda dahi mutlaka Türkçeye çevrilmesi gereken genel İngilizce yapısal başlık ve terimler
+    private static readonly HashSet<string> TranslatableSingleWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Note", "Notes", "Tip", "Tips", "Warning", "Warnings", "Caution", "Important",
+        "Summary", "Introduction", "Preface", "Foreword", "Conclusion", "Conclusions", "Appendix", "Glossary", "Index", "References", "Bibliography",
+        "Overview", "Background", "Prerequisites", "Requirements", "Objectives", "Goals",
+        "Performance", "Cost", "Costs", "Modularity", "Flexibility", "Scalability", "Security", "Reliability", "Availability", "Maintainability",
+        "Architecture", "Design", "Implementation", "Evaluation", "Testing", "Validation", "Verification", "Optimization",
+        "Example", "Examples", "Figure", "Figures", "Table", "Tables", "Chapter", "Chapters", "Part", "Parts", "Section", "Sections",
+        "Problem", "Problems", "Solution", "Solutions", "Challenge", "Challenges", "Limitation", "Limitations",
+        "Advantage", "Advantages", "Disadvantage", "Disadvantages", "Benefit", "Benefits", "Strengths", "Weaknesses",
+        "Context", "Memory", "Tools", "Nodes", "Edges", "Properties", "Graph", "Graphs", "Hypergraph", "Hypergraphs", "Broadcast"
+    };
+
     /// <summary>
     /// LLM tarafından biçimi bozulmuş veya eski formatta dönen belirteçleri kanonik ⟦PH_000001⟧ formatına normalize eder.
     /// </summary>
@@ -37,26 +54,48 @@ public sealed partial class DomTreeWalkerMasker
     }
 
     /// <summary>
-    /// Verilen metnin yalnızca yer tutuculardan (⟦PH_xxxxxx⟧), sayılardan, boşluklardan veya noktalama işaretlerinden
-    /// oluşup oluşmadığını (anlamlı bir doğal dil cümlesi barındırmadığını) kontrol eder.
-    /// Saf teknik bloklarda çevrilen metnin orijinal yer tutucuyla aynı kalması bir hata değil, beklenen davranıştır.
+    /// Verilen metnin yalnızca yer tutuculardan (⟦PH_xxxxxx⟧), HTML etiketlerinden, sayılardan, boşluklardan,
+    /// noktalama işaretlerinden veya çevrilmemesi doğal olan tek kelimelik özel ürün/teknoloji adlarından (örn: Cognee, Mem0, Zep, Neo4j)
+    /// oluşup oluşmadığını kontrol eder.
     /// </summary>
     public static bool IsPureTechnicalOrPlaceholder(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return true;
 
-        var withoutPlaceholders = FuzzyPlaceholderRegex().Replace(text, "");
+        var withoutPlaceholders = FuzzyPlaceholderRegex().Replace(text, " ");
+        var visibleText = HtmlTagOrEntityRegex().Replace(withoutPlaceholders, " ").Trim();
+
+        if (string.IsNullOrWhiteSpace(visibleText)) return true;
+
         var letterCount = 0;
-        foreach (var c in withoutPlaceholders)
+        foreach (var c in visibleText)
         {
             if (char.IsLetter(c))
             {
                 letterCount++;
-                if (letterCount >= 2) return false;
             }
         }
 
-        return true;
+        if (letterCount < 2) return true;
+
+        // Eğer görünür metin boşluk içermeyen tek bir kelimeyse (örn: "Cognee", "Mem0", "Zep", "Neo4j", "SPARQL"):
+        // Genel İngilizce başlık kelimelerinden biri değilse ve büyük harfle başlıyorsa veya rakam/sembol içeriyorsa
+        // özel isim / teknik tanımlayıcı kabul edilir.
+        if (!visibleText.Any(char.IsWhiteSpace))
+        {
+            var cleanWord = visibleText.Trim('.', ',', ':', ';', '-', '–', '—', '(', ')', '[', ']', '"', '\'', '“', '”');
+            if (!string.IsNullOrEmpty(cleanWord) && !TranslatableSingleWords.Contains(cleanWord))
+            {
+                bool hasDigitOrSymbol = cleanWord.Any(c => char.IsDigit(c) || c is '_' or '/' or '+' or '#');
+                bool startsWithUpper = char.IsUpper(cleanWord[0]);
+                if (hasDigitOrSymbol || startsWithUpper)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -190,12 +229,20 @@ public sealed partial class DomTreeWalkerMasker
             return true;
         }
 
-        // Dizin çapaları ve dipnot referansları
+        // Dizin çapaları, dipnot referansları ve dış web bağlantıları (http/https)
         if (tag == "a" && (
+            element.GetAttribute("href")?.StartsWith("http", StringComparison.OrdinalIgnoreCase) == true ||
             element.GetAttribute("data-type") == "indexterm" ||
             element.GetAttribute("epub:type") == "indexterm" ||
             element.GetAttribute("epub:type") == "noteref" ||
-            element.ClassList.Contains("indexterm")))
+            element.ClassList.Contains("indexterm") ||
+            element.ClassList.Contains("customlink")))
+        {
+            return true;
+        }
+
+        // Akademik atıf sarmalayıcıları (<span class="customlink">)
+        if (tag == "span" && element.ClassList.Contains("customlink"))
         {
             return true;
         }

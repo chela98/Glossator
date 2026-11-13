@@ -192,12 +192,14 @@ public class HtmlSegmenterTests
     }
 
     [Fact]
-    public void SegmentFile_OnAgenticGraphRagCh01_PreservesDevOpsAndActionBlindnessText()
+    public void SegmentHtml_WithSelfClosingAnchorTag_PreservesDevOpsAndActionBlindnessText()
     {
-        var path = Path.Combine(Path.GetTempPath(), "Glossator", "SampleBook", "OEBPS", "ch01.html");
-        if (!File.Exists(path)) return; // Skip if temp file is not present
+        var html = @"<div>
+<p>The <a contenteditable=""false"" data-primary=""action blindness"" data-type=""indexterm"" id=""ab""/>shift from simple Q&amp;A to autonomous action exposes this vulnerability clearly. When your DevOps agent needs to diagnose a production issue</p>
+<p>Without <a contenteditable=""false"" data-primary=""action blindness"" data-type=""indexterm"" id=""ab2""/>understanding relationships between entities, cascade failures through dependent systems</p>
+</div>";
 
-        var (document, segments) = HtmlSegmenter.SegmentFile(path);
+        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
 
         // DevOps paragrafı artık yutulmamış olmalı
         var devOpsSeg = segments.FirstOrDefault(s => s.MaskedText.Contains("DevOps agent"));

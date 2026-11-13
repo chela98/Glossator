@@ -81,11 +81,43 @@ public sealed class ResilienceChatClient(
 
             try
             {
+                UsageContent? latestUsage = null;
+                ChatResponseUpdate? lastUpdate = null;
+
                 while (streamStarted)
                 {
-                    yield return enumerator.Current;
+                    var current = enumerator.Current;
+
+                    // KÜMÜLATİF TOKEN ŞİŞMESİ KORUMASI (.NET Aspire / OpenTelemetryChatClient için):
+                    // Gemini gibi sağlayıcılar her SSE chunk'ında o ana kadarki kümülatif UsageContent'i gönderir.
+                    // UseOpenTelemetry() ise akıştaki tüm UsageContent'leri üst üste toplar (10K -> 100K şişmesi).
+                    // Ara chunk'lardaki UsageContent'leri sıyırıp sadece en son geçerli UsageContent'i akış sonunda iletiyoruz.
+                    for (var i = current.Contents.Count - 1; i >= 0; i--)
+                    {
+                        if (current.Contents[i] is UsageContent uc)
+                        {
+                            latestUsage = NormalizeUsageContent(uc);
+                            current.Contents.RemoveAt(i);
+                        }
+                    }
+
+                    lastUpdate = current;
+                    yield return current;
                     streamStarted = await enumerator.MoveNextAsync();
                 }
+
+                if (latestUsage != null)
+                {
+                    var usageUpdate = new ChatResponseUpdate
+                    {
+                        Role = lastUpdate?.Role ?? ChatRole.Assistant,
+                        ModelId = lastUpdate?.ModelId,
+                        ResponseId = lastUpdate?.ResponseId,
+                        Contents = [latestUsage]
+                    };
+                    yield return usageUpdate;
+                }
+
                 yield break;
             }
             finally
@@ -96,6 +128,38 @@ public sealed class ResilienceChatClient(
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Gemini OpenAI uyumluluk katmanı düşünme (thinking/reasoning) tokenlarını completion_tokens'a (OutputTokenCount)
+    /// dahil etmeyip doğrudan total_tokens (TotalTokenCount) içine yazar (total = input + output + thinking).
+    /// Bu metot gizli thinking farkını yakalar, AdditionalCounts["ReasoningTokenCount"] içine kaydeder ve
+    /// faturalandırılan OutputTokenCount değerini gerçek toplam çıktıya (metin + düşünme) eşitler.
+    /// </summary>
+    private static UsageContent NormalizeUsageContent(UsageContent uc)
+    {
+        var details = uc.Details;
+        if (details == null)
+        {
+            return uc;
+        }
+
+        var input = details.InputTokenCount ?? 0;
+        var output = details.OutputTokenCount ?? 0;
+        var total = details.TotalTokenCount ?? 0;
+
+        if (total > (input + output) && input > 0)
+        {
+            var implicitReasoning = total - input - output;
+            details.AdditionalCounts ??= [];
+            if (!details.AdditionalCounts.ContainsKey("OutputTokenDetails.ReasoningTokenCount"))
+            {
+                details.AdditionalCounts["OutputTokenDetails.ReasoningTokenCount"] = implicitReasoning;
+            }
+            details.OutputTokenCount = total - input;
+        }
+
+        return uc;
     }
 
     private static bool IsTransientException(Exception ex)

@@ -72,44 +72,68 @@ public static class AiServiceExtensions
             var innerClient = openAiClient.GetChatClient(modelId).AsIChatClient();
 
             // .NET 10 Pipeline Builder
-            var builder = innerClient.AsBuilder();
+            // ÖNEMLİ SIRALAMA KURALI (ChatClientBuilder Dıştan İçe Sarmalar):
+            // 1. İlk eklenen middleware EN DIŞ katmandır (StreamingChatHelper'a en yakın).
+            // 2. Son eklenen middleware EN İÇ katmandır (OpenAIChatClient'a en yakın).
+            // OpenTelemetry en dışta olmalıdır ki ResilienceChatClient'ın tekilleştirip normalize ettiği
+            // nihai UsageContent (input/output/reasoning token) paketini eksiksiz yakalayabilsin.
+            var builder = innerClient
+                .AsBuilder()
+                .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = true);
 
-            // Eğer reasoning_effort tanımlanmışsa (örn: "none"), middleware ile ChatOptions içine enjekte et
-            if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
-            {
-                var effort = agentConfig.ReasoningEffort;
-                builder.Use((messages, chatOptions, next, ct) =>
-                {
-                    chatOptions ??= new ChatOptions();
-                    chatOptions.AdditionalProperties ??= new AdditionalPropertiesDictionary();
-                    chatOptions.AdditionalProperties["reasoning_effort"] = effort;
-                    return next(messages, chatOptions, ct);
-                });
-            }
-
-            // Transport Seviyesinde 429 / 503 Jittered Exponential Backoff
-            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<Glossator.AI.Clients.ResilienceChatClient>>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Glossator.AI.Clients.ResilienceChatClient>.Instance;
-
-            builder.Use(c => new Glossator.AI.Clients.ResilienceChatClient(c, logger));
-
-            // Merkezi RateLimiter ara yazılımı
-            var rateLimiter = sp.GetService<System.Threading.RateLimiting.RateLimiter>();
-            if (rateLimiter != null)
-            {
-                builder.UseRateLimiting(rateLimiter);
-            }
-
-            // Microsoft.Extensions.AI Resmi Loglama Ara Yazılımı (Aspire Dashboard Canlı İstek/Yanıt ve Token Akışı)
+            // Microsoft.Extensions.AI Resmi Loglama Ara Yazılımı
             var loggerFactory = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
             if (loggerFactory != null)
             {
                 builder.UseLogging(loggerFactory);
             }
 
-            return builder
-                .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = true)
-                .Build(sp);
+            // Transport Seviyesinde 429 / 503 Jittered Exponential Backoff + Streaming Usage Tekilleştirme
+            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<Glossator.AI.Clients.ResilienceChatClient>>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Glossator.AI.Clients.ResilienceChatClient>.Instance;
+
+            builder.Use(c => new Glossator.AI.Clients.ResilienceChatClient(c, logger));
+
+            // Merkezi RateLimiter ara yazılımı (her gerçek deneme için jeton alır)
+            var rateLimiter = sp.GetService<System.Threading.RateLimiting.RateLimiter>();
+            if (rateLimiter != null)
+            {
+                builder.UseRateLimiting(rateLimiter);
+            }
+
+            // Eğer reasoning_effort tanımlanmışsa (örn: "none", "low", "medium", "high"),
+            // en iç katmanda doğrudan OpenAI SDK ChatCompletionOptions.ReasoningEffortLevel üzerinden enjekte et
+            if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
+            {
+                var effort = agentConfig.ReasoningEffort.Trim();
+                builder.Use((messages, chatOptions, next, ct) =>
+                {
+                    chatOptions ??= new ChatOptions();
+                    chatOptions.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+                    chatOptions.AdditionalProperties["reasoning_effort"] = effort;
+
+                    var prevFactory = chatOptions.RawRepresentationFactory;
+                    chatOptions.RawRepresentationFactory = client =>
+                    {
+                        var raw = prevFactory?.Invoke(client) as OpenAI.Chat.ChatCompletionOptions
+                                  ?? new OpenAI.Chat.ChatCompletionOptions();
+#pragma warning disable OPENAI001
+                        raw.ReasoningEffortLevel = effort.ToLowerInvariant() switch
+                        {
+                            "low" => OpenAI.Chat.ChatReasoningEffortLevel.Low,
+                            "medium" => OpenAI.Chat.ChatReasoningEffortLevel.Medium,
+                            "high" => OpenAI.Chat.ChatReasoningEffortLevel.High,
+                            _ => new OpenAI.Chat.ChatReasoningEffortLevel(effort)
+                        };
+#pragma warning restore OPENAI001
+                        return raw;
+                    };
+
+                    return next(messages, chatOptions, ct);
+                });
+            }
+
+            return builder.Build(sp);
         });
     }
 

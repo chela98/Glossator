@@ -80,10 +80,13 @@ public sealed class GlossaryImportCommand(SqliteGlossaryRepository repository, I
                 importedCount++;
             }
 
+            var cleanedCount = await repository.CleanupObsoleteTermsAsync(cancellationToken);
+
             var panel = new Panel(
                 new Markup(
                     $"[bold white]Kaynak Dosya:[/] [cyan]{Markup.Escape(Path.GetFullPath(filePath))}[/]\n" +
                     $"[bold white]İçe Aktarılan Terim Sayısı:[/] [green]{importedCount}[/]\n" +
+                    (cleanedCount > 0 ? $"[bold white]Temizlenen Artık Terim:[/] [yellow]{cleanedCount}[/]\n" : "") +
                     $"[bold white]Onay Durumu:[/] {(markReviewed ? "[green]Onaylı (Reviewed)[/]" : "[yellow]Onaysız (Unreviewed)[/]")}\n" +
                     $"[bold white]Atanan Kaynak:[/] [yellow]{Markup.Escape(source)}[/]"
                 ))
