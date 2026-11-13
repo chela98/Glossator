@@ -98,15 +98,7 @@ namespace Glossator.Core.Models.Epub
                 return null;
 
             var allowedRoot = string.IsNullOrWhiteSpace(RootDirectory) ? OpfDirectory : RootDirectory;
-            var normalizedRoot = Path.GetFullPath(allowedRoot)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                + Path.DirectorySeparatorChar;
-
-            var candidate = Path.GetFullPath(Path.Combine(
-                OpfDirectory,
-                CoverImageHref.Replace('/', Path.DirectorySeparatorChar)));
-
-            if (!candidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            if (!Glossator.Core.Security.PathSanitizer.TryResolveWithinRoot(allowedRoot, OpfDirectory, CoverImageHref, out var candidate))
                 return null;
 
             return File.Exists(candidate) ? candidate : null;

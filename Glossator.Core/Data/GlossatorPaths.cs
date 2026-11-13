@@ -72,4 +72,18 @@ public static class GlossatorPaths
     {
         return Path.Combine(GetGlossatorHomeDirectory(), "user_settings.json");
     }
+
+    /// <summary>
+    /// Açılan EPUB çalışma klasörlerinin paylaşılan geçici dizin yerine uygulama kontrolünde
+    /// saklandığı dizini döner (~/.glossator/work).
+    /// </summary>
+    public static string GetWorkspacesDirectory()
+    {
+        var workDir = Path.Combine(GetGlossatorHomeDirectory(), "work");
+        if (!Directory.Exists(workDir))
+        {
+            Directory.CreateDirectory(workDir);
+        }
+        return workDir;
+    }
 }

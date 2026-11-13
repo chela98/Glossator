@@ -10,9 +10,11 @@ public static class EpubGlossaryReader
 
     public static List<GlossaryEntry> Read(EpubPackage package)
     {
-        if (package.GlossaryItem == null) return [];
+        if (package.GlossaryItem == null || string.IsNullOrWhiteSpace(package.OpfDirectory)) return [];
 
-        var fullPath = Path.Combine(package.OpfDirectory, package.GlossaryItem.Href);
+        var allowedRoot = string.IsNullOrWhiteSpace(package.RootDirectory) ? package.OpfDirectory : package.RootDirectory;
+        if (!Glossator.Core.Security.PathSanitizer.TryResolveWithinRoot(allowedRoot, package.OpfDirectory, package.GlossaryItem.Href, out var fullPath))
+            return [];
         if (!File.Exists(fullPath)) return [];
 
         var htmlContent = File.ReadAllText(fullPath);

@@ -137,20 +137,20 @@ public static class EpubPackager
 
                 if (translationMap.TryGetValue(item.Href, out var translatedHref))
                 {
-                    actualFileOnDisk = Path.Combine(opfDir, translatedHref);
-                    // Zip içindeki adı da translatedHref olarak kaydedelim
-                    var opfRelativePrefix = Path.GetRelativePath(rootDir, opfDir).Replace('\\', '/');
-                    zipEntryName = opfRelativePrefix == "." ? translatedHref : $"{opfRelativePrefix}/{translatedHref}";
+                    if (!PathSanitizer.TryResolveWithinRoot(rootDir, opfDir, translatedHref, out actualFileOnDisk))
+                        continue;
+
+                    // Zip içindeki adı da kök-göreceli olarak kaydet
+                    zipEntryName = Path.GetRelativePath(rootDir, actualFileOnDisk).Replace('\\', '/');
                 }
                 else
                 {
                     // Orijinal dosya (görsel, css, font veya çevrilmemiş kapak vb.)
-                    var safeHref = item.Href.Replace('\\', '/').TrimStart('/');
-                    if (safeHref.Contains("../") || safeHref.Contains("/..")) continue;
-                    actualFileOnDisk = Path.Combine(opfDir, safeHref);
-                    var opfRelativePrefix = Path.GetRelativePath(rootDir, opfDir).Replace('\\', '/');
-                    zipEntryName = opfRelativePrefix == "." ? safeHref : $"{opfRelativePrefix}/{safeHref}";
-                    if (!Path.GetFullPath(actualFileOnDisk).StartsWith(Path.GetFullPath(rootDir), StringComparison.OrdinalIgnoreCase)) continue;
+                    var cleanHref = item.Href.Replace('\\', '/').TrimStart('/');
+                    if (!PathSanitizer.TryResolveWithinRoot(rootDir, opfDir, cleanHref, out actualFileOnDisk))
+                        continue;
+
+                    zipEntryName = Path.GetRelativePath(rootDir, actualFileOnDisk).Replace('\\', '/');
                 }
 
                 if (handledPaths.Contains(zipEntryName)) continue;
@@ -183,9 +183,13 @@ public static class EpubPackager
     public static Dictionary<string, string> DiscoverTranslations(EpubPackage package)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var allowedRoot = string.IsNullOrWhiteSpace(package.RootDirectory) ? package.OpfDirectory : package.RootDirectory;
 
         foreach (var item in package.Manifest.Values.Where(m => m.IsDocument))
         {
+            if (!PathSanitizer.TryResolveWithinRoot(allowedRoot, package.OpfDirectory, item.Href, out _))
+                continue;
+
             var fileName = Path.GetFileName(item.Href);
             var dirName = Path.GetDirectoryName(item.Href) ?? string.Empty;
             var baseName = Path.GetFileNameWithoutExtension(fileName);
@@ -197,9 +201,8 @@ public static class EpubPackager
             // 1. Öncelik: Orijinal uzantı ile ara (örn: .xhtml)
             var trFileName = $"{baseName}_tr{ext}";
             var trRelativeHref = string.IsNullOrEmpty(dirName) ? trFileName : Path.Combine(dirName, trFileName).Replace('\\', '/');
-            var trFullPath = Path.Combine(package.OpfDirectory, trRelativeHref);
-
-            if (File.Exists(trFullPath) && !IsPartialOnly(trFullPath))
+            if (PathSanitizer.TryResolveWithinRoot(allowedRoot, package.OpfDirectory, trRelativeHref, out var trFullPath) &&
+                File.Exists(trFullPath) && !IsPartialOnly(trFullPath))
             {
                 map[item.Href] = trRelativeHref;
                 continue;
@@ -213,9 +216,8 @@ public static class EpubPackager
 
                 var altFileName = $"{baseName}_tr{altExt}";
                 var altRelativeHref = string.IsNullOrEmpty(dirName) ? altFileName : Path.Combine(dirName, altFileName).Replace('\\', '/');
-                var altFullPath = Path.Combine(package.OpfDirectory, altRelativeHref);
-
-                if (File.Exists(altFullPath) && !IsPartialOnly(altFullPath))
+                if (PathSanitizer.TryResolveWithinRoot(allowedRoot, package.OpfDirectory, altRelativeHref, out var altFullPath) &&
+                    File.Exists(altFullPath) && !IsPartialOnly(altFullPath))
                 {
                     map[item.Href] = altRelativeHref;
                     break;
@@ -241,7 +243,7 @@ public static class EpubPackager
         var rootDir = package.RootDirectory;
         var relativePath = Path.GetRelativePath(rootDir, opfPath).Replace('\\', '/');
 
-        var doc = XDocument.Load(opfPath);
+        var doc = SafeXmlLoader.Load(opfPath, allowDtdIgnore: true);
 
         // 1. Dili güncelle: Tüm dc:language ve meta language tanımlarını hedef dile çek
         var langElements = doc.Descendants().Where(e =>
@@ -345,13 +347,16 @@ public static class EpubPackager
 
         if (ncxItem == null) return (null, null);
 
-        var ncxFullPath = Path.Combine(package.OpfDirectory, ncxItem.Href);
-        if (!File.Exists(ncxFullPath)) return (null, null);
-
         var rootDir = package.RootDirectory;
+        if (!PathSanitizer.TryResolveWithinRoot(rootDir, package.OpfDirectory, ncxItem.Href, out var ncxFullPath) ||
+            !File.Exists(ncxFullPath))
+        {
+            return (null, null);
+        }
+
         var relativePath = Path.GetRelativePath(rootDir, ncxFullPath).Replace('\\', '/');
 
-        var doc = XDocument.Load(ncxFullPath);
+        var doc = SafeXmlLoader.Load(ncxFullPath, allowDtdIgnore: true);
 
         // 1. Kök ncx dilini ve docTitle'ı senkronize et
         if (doc.Root != null)
@@ -399,8 +404,8 @@ public static class EpubPackager
                 contentEl!.SetAttributeValue("src", newSrc);
 
                 // 2. Başlığı Türkçe dosyadan dinamik çek
-                var trFullPath = Path.Combine(package.OpfDirectory, trFile);
-                if (File.Exists(trFullPath) && labelEl != null)
+                if (PathSanitizer.TryResolveWithinRoot(rootDir, package.OpfDirectory, trFile, out var trFullPath) &&
+                    File.Exists(trFullPath) && labelEl != null)
                 {
                     var updatedTitle = ExtractHeadingFromDocument(trFullPath, anchor, htmlDomCache);
                     if (!string.IsNullOrWhiteSpace(updatedTitle))
@@ -427,10 +432,13 @@ public static class EpubPackager
 
         if (navItem == null) return (null, null);
 
-        var navFullPath = Path.Combine(package.OpfDirectory, navItem.Href);
-        if (!File.Exists(navFullPath)) return (null, null);
-
         var rootDir = package.RootDirectory;
+        if (!PathSanitizer.TryResolveWithinRoot(rootDir, package.OpfDirectory, navItem.Href, out var navFullPath) ||
+            !File.Exists(navFullPath))
+        {
+            return (null, null);
+        }
+
         var relativePath = Path.GetRelativePath(rootDir, navFullPath).Replace('\\', '/');
 
         var navContent = File.ReadAllText(navFullPath);
@@ -456,8 +464,8 @@ public static class EpubPackager
                 var newHref = RewriteHref(href, navItem.Href, translationMap);
                 a.SetAttribute("href", newHref);
 
-                var trFullPath = Path.Combine(package.OpfDirectory, trFile);
-                if (File.Exists(trFullPath))
+                if (PathSanitizer.TryResolveWithinRoot(rootDir, package.OpfDirectory, trFile, out var trFullPath) &&
+                    File.Exists(trFullPath))
                 {
                     var navParent = a.Closest("nav");
                     var navType = navParent?.GetAttribute("epub:type") ?? navParent?.GetAttribute("type") ?? "";

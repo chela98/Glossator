@@ -15,9 +15,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="appsettings*.json">
+    <Content Include="appsettings.example.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="appsettings.json" Condition="Exists('appsettings.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 
@@ -27,6 +32,7 @@
     <AssemblyName>glossator</AssemblyName>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <SatelliteResourceLanguages>en;tr</SatelliteResourceLanguages>
     <UserSecretsId>glossator-cli-secrets-9a8b7c6d</UserSecretsId>
   </PropertyGroup>
 

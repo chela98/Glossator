@@ -174,4 +174,29 @@ public class SafeZipExtractorTests
         // Act & Assert
         Assert.Throws<FileNotFoundException>(() => SafeZipExtractor.ExtractSafely(missingArchive, extractDir));
     }
+
+    [Fact]
+    public void ExtractSafely_WithDuplicateEntriesAndOverwriteFalse_ThrowsIOException()
+    {
+        var tempZip = Path.Combine(Path.GetTempPath(), $"DupZip_{Guid.NewGuid():N}.zip");
+        var extractDir = Path.Combine(Path.GetTempPath(), $"DupZipOut_{Guid.NewGuid():N}");
+
+        try
+        {
+            using (var zip = ZipFile.Open(tempZip, ZipArchiveMode.Create))
+            {
+                var e1 = zip.CreateEntry("OEBPS/dup.xhtml");
+                using (var w1 = new StreamWriter(e1.Open())) w1.Write("first");
+                var e2 = zip.CreateEntry("OEBPS/dup.xhtml");
+                using (var w2 = new StreamWriter(e2.Open())) w2.Write("second");
+            }
+
+            Assert.Throws<IOException>(() => SafeZipExtractor.ExtractSafely(tempZip, extractDir));
+        }
+        finally
+        {
+            if (File.Exists(tempZip)) File.Delete(tempZip);
+            if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
+        }
+    }
 }

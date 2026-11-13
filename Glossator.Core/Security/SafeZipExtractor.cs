@@ -8,7 +8,7 @@ public static class SafeZipExtractor
     public const long MaxTotalExtractionBytes = 1024L * 1024L * 1024L; // 1 GB Safety limit
     public const int MaxEntryLimit = 10_000;
 
-    public static void ExtractSafely(string archivePath, string destinationDirectory)
+    public static void ExtractSafely(string archivePath, string destinationDirectory, bool overwrite = false)
     {
         var fullDestDir = Path.GetFullPath(destinationDirectory);
         if (!fullDestDir.EndsWith(Path.DirectorySeparatorChar))
@@ -26,14 +26,31 @@ public static class SafeZipExtractor
 
         foreach (var entry in archive.Entries)
         {
-            totalBytes += entry.Length;
+            if (entry.Length < 0)
+            {
+                throw new InvalidDataException($"Geçersiz arşiv girdi boyutu: {entry.FullName}");
+            }
+
+            try
+            {
+                totalBytes = checked(totalBytes + entry.Length);
+            }
+            catch (OverflowException ex)
+            {
+                throw new InvalidDataException("Arşiv boyutu izin verilen 1 GB güvenlik sınırını aştı (Decompression Bomb).", ex);
+            }
+
             if (totalBytes > MaxTotalExtractionBytes)
             {
                 throw new InvalidDataException("Arşiv boyutu izin verilen 1 GB güvenlik sınırını aştı (Decompression Bomb).");
             }
 
-            var destPath = Path.GetFullPath(Path.Combine(fullDestDir, entry.FullName));
-            if (!destPath.StartsWith(fullDestDir, StringComparison.Ordinal))
+            string destPath;
+            try
+            {
+                destPath = PathSanitizer.ResolveWithinRoot(fullDestDir, entry.FullName);
+            }
+            catch (SecurityException)
             {
                 throw new SecurityException($"Zip Slip saldırısı tespit edildi: {entry.FullName}");
             }
@@ -50,7 +67,12 @@ public static class SafeZipExtractor
                 Directory.CreateDirectory(parentDir);
             }
 
-            entry.ExtractToFile(destPath, overwrite: true);
+            if (!overwrite && File.Exists(destPath))
+            {
+                throw new IOException($"Arşiv içinde çakışan hedef dosya tespit edildi (overwrite devre dışı): {entry.FullName}");
+            }
+
+            entry.ExtractToFile(destPath, overwrite);
         }
     }
 }

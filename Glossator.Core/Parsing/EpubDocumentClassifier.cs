@@ -74,16 +74,14 @@ public static class EpubDocumentClassifier
         }
 
         // 6. Dosya içeriğine dayalı derin semantik kontrol (varsa)
-        if (!string.IsNullOrEmpty(opfDirectory))
+        if (!string.IsNullOrEmpty(opfDirectory) &&
+            Glossator.Core.Security.PathSanitizer.TryResolveWithinRoot(opfDirectory, opfDirectory, item.Href, out var fullPath) &&
+            File.Exists(fullPath))
         {
-            var fullPath = Path.Combine(opfDirectory, item.Href);
-            if (File.Exists(fullPath))
+            var roleFromContent = InspectDocumentContent(fullPath);
+            if (roleFromContent.HasValue)
             {
-                var roleFromContent = InspectDocumentContent(fullPath);
-                if (roleFromContent.HasValue)
-                {
-                    return roleFromContent.Value;
-                }
+                return roleFromContent.Value;
             }
         }
 
@@ -96,6 +94,8 @@ public static class EpubDocumentClassifier
     /// </summary>
     public static void ClassifyPackage(EpubPackage package)
     {
+        var allowedRoot = string.IsNullOrWhiteSpace(package.RootDirectory) ? package.OpfDirectory : package.RootDirectory;
+
         // 1. Manifest ve Spine rollerini ata
         foreach (var item in package.Manifest.Values)
         {
@@ -105,8 +105,8 @@ public static class EpubDocumentClassifier
         // 2. Belgelerin gerçek başlıklarını HTML DOM'undan dinamik oku
         foreach (var item in package.Spine.Where(s => s.IsDocument))
         {
-            var fullPath = Path.Combine(package.OpfDirectory, item.Href);
-            if (File.Exists(fullPath))
+            if (Glossator.Core.Security.PathSanitizer.TryResolveWithinRoot(allowedRoot, package.OpfDirectory, item.Href, out var fullPath) &&
+                File.Exists(fullPath))
             {
                 item.Title = ExtractDocumentTitle(fullPath);
             }

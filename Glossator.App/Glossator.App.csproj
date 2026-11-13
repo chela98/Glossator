@@ -9,6 +9,7 @@
     <AssemblyName>Glossator.App</AssemblyName>
     <RootNamespace>Glossator.App</RootNamespace>
     <ApplicationIcon>Assets\glossator.ico</ApplicationIcon>
+    <SatelliteResourceLanguages>en;tr</SatelliteResourceLanguages>
     <UserSecretsId>glossator-cli-secrets-9a8b7c6d</UserSecretsId>
   </PropertyGroup>
 
@@ -30,9 +31,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\Glossator.Cli\appsettings*.json" Link="%(Filename)%(Extension)">
+    <Content Include="..\Glossator.Cli\appsettings.example.json" Link="%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
+    <Content Include="..\Glossator.Cli\appsettings.json" Link="%(Filename)%(Extension)" Condition="Exists('..\Glossator.Cli\appsettings.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
 

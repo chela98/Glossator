@@ -170,4 +170,28 @@ public class PathSanitizerTests
             if (Directory.Exists(baseDir)) Directory.Delete(baseDir, true);
         }
     }
+
+    [Theory]
+    [InlineData("../outside.opf")]
+    [InlineData(@"..\..\outside.opf")]
+    [InlineData("/etc/passwd")]
+    [InlineData(@"C:\Windows\win.ini")]
+    [InlineData(@"\\attacker\share\evil.xml")]
+    [InlineData("../book-evil/content.opf")]
+    [InlineData("sub/../../escape.xhtml")]
+    public void ResolveWithinRoot_WithTraversalOrAbsolutePath_ThrowsSecurityException(string maliciousPath)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "book");
+        Assert.Throws<System.Security.SecurityException>(() => PathSanitizer.ResolveWithinRoot(root, maliciousPath));
+    }
+
+    [Fact]
+    public void ResolveWithinRoot_WithSiblingSubdirInsideAllowedRoot_ResolvesSuccessfullyAndBlocksParentEscape()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"epub_root_{Guid.NewGuid():N}");
+        var opfDir = Path.Combine(root, "OEBPS");
+        var resolved = PathSanitizer.ResolveWithinRoot(root, opfDir, "../Images/cover.png");
+        Assert.Equal(Path.GetFullPath(Path.Combine(root, "Images", "cover.png")), resolved);
+        Assert.Throws<System.Security.SecurityException>(() => PathSanitizer.ResolveWithinRoot(root, opfDir, "../../outside.png"));
+    }
 }

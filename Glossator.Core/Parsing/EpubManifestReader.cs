@@ -1,5 +1,6 @@
-using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Xml.Linq;
+using Glossator.Core.Data;
 using Glossator.Core.Models.Epub;
 using Glossator.Core.Security;
 
@@ -39,7 +40,7 @@ public static class EpubManifestReader
         }
 
         var opfPath = ResolveOpfPath(workingDirectory);
-        var doc = XDocument.Load(opfPath);
+        var doc = SafeXmlLoader.Load(opfPath, allowDtdIgnore: true);
         var opfDirectory = Path.GetDirectoryName(Path.GetFullPath(opfPath)) ?? string.Empty;
 
         // Metadata Ayrıştırma
@@ -149,38 +150,71 @@ public static class EpubManifestReader
     }
 
     /// <summary>
-    /// .epub dosyasını işletim sisteminin geçici klasörüne açar.
-    /// Zaten açılmış ve üzerinde çalışılmış bir oturum varsa çevrilmiş dosyaları korur.
+    /// .epub dosyasını paylaşılan %TEMP% yerine uygulama kontrolündeki izole ve çakışmasız çalışma klasörüne açar.
+    /// Aynı içerik özetine sahip oturum varsa çevrilmiş dosyaları koruyarak kaldığı yerden devam edilmesini sağlar.
     /// </summary>
     private static string ExtractToTempDirectory(string epubFilePath)
     {
-        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(epubFilePath);
-        var tempDir = Path.Combine(Path.GetTempPath(), "Glossator", fileNameWithoutExt);
-
-        if (!Directory.Exists(tempDir) || !File.Exists(Path.Combine(tempDir, "META-INF", "container.xml")))
+        var rawName = Path.GetFileNameWithoutExtension(epubFilePath);
+        var safeBaseName = PathSanitizer.SanitizeFileName(rawName, maxBaseLength: 48);
+        string contentHash;
+        using (var fs = new FileStream(epubFilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
-            Directory.CreateDirectory(tempDir);
-            SafeZipExtractor.ExtractSafely(epubFilePath, tempDir);
+            contentHash = Convert.ToHexString(SHA256.HashData(fs))[..12].ToLowerInvariant();
         }
 
-        return tempDir;
+        var workspacesRoot = GlossatorPaths.GetWorkspacesDirectory();
+        var workDir = PathSanitizer.ResolveWithinRoot(workspacesRoot, $"{safeBaseName}_{contentHash}");
+        var containerMarker = Path.Combine(workDir, "META-INF", "container.xml");
+
+        if (Directory.Exists(workDir) && File.Exists(containerMarker))
+        {
+            return workDir;
+        }
+
+        var stagingDir = PathSanitizer.ResolveWithinRoot(workspacesRoot, $".staging_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(stagingDir);
+            SafeZipExtractor.ExtractSafely(epubFilePath, stagingDir, overwrite: false);
+
+            if (Directory.Exists(workDir) && !File.Exists(containerMarker))
+            {
+                Directory.Delete(workDir, recursive: true);
+            }
+
+            if (!Directory.Exists(workDir))
+            {
+                Directory.Move(stagingDir, workDir);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(stagingDir))
+            {
+                try { Directory.Delete(stagingDir, recursive: true); } catch { }
+            }
+        }
+
+        return workDir;
     }
 
     /// <summary>
-    /// Klasör içindeki META-INF/container.xml dosyasını veya ilk .opf dosyasını bulur.
+    /// Klasör içindeki META-INF/container.xml dosyasını (kök dizin dışına çıkışa izin vermeden) veya ilk .opf dosyasını bulur.
     /// </summary>
     private static string ResolveOpfPath(string directoryPath)
     {
-        var containerPath = Path.Combine(directoryPath, "META-INF", "container.xml");
+        var containerPath = PathSanitizer.ResolveWithinRoot(directoryPath, "META-INF/container.xml");
         if (File.Exists(containerPath))
         {
-            var containerDoc = XDocument.Load(containerPath);
+            var containerDoc = SafeXmlLoader.Load(containerPath, allowDtdIgnore: false);
             var rootfileElement = containerDoc.Descendants().FirstOrDefault(e => e.Name.LocalName == "rootfile");
             var fullPath = rootfileElement?.Attribute("full-path")?.Value;
 
-            if (!string.IsNullOrEmpty(fullPath))
+            if (!string.IsNullOrWhiteSpace(fullPath))
             {
-                var candidate = Path.Combine(directoryPath, fullPath);
+                var unescaped = Uri.UnescapeDataString(fullPath);
+                var candidate = PathSanitizer.ResolveWithinRoot(directoryPath, unescaped);
                 if (File.Exists(candidate))
                 {
                     return candidate;
