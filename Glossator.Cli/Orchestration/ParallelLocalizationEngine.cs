@@ -94,12 +94,13 @@ public sealed class ParallelLocalizationEngine(
                     var task = ctx.AddTask($"[green]{Markup.Escape(chapterFileName)}[/] (Başlatılıyor...)", maxValue: 100);
                     activeTasks[chapterFileName] = task;
 
+                    CheckpointStore? checkpointStore = null;
                     try
                     {
 
                     // 1. Her bölüm için izole DI Kapsamı (IServiceScope)
                     await using var scope = rootServiceProvider.CreateAsyncScope();
-                    var checkpointStore = scope.ServiceProvider.GetRequiredService<CheckpointStore>();
+                    checkpointStore = scope.ServiceProvider.GetRequiredService<CheckpointStore>();
                     var tracker = scope.ServiceProvider.GetRequiredService<TermUsageTracker>();
                     tracker.BeginNewScope(chapterFileName);
 
@@ -248,16 +249,18 @@ public sealed class ParallelLocalizationEngine(
 
                     // 5. Nihai HTML Çıktısını Diske Yaz (W3C Katı XHTML)
                     HtmlSegmenter.ApplyTranslations(segments);
-                    await File.WriteAllTextAsync(outputFilePath, document.ToStrictXhtml(), ct);
+                    var finalXhtml = document.ToStrictXhtml();
 
                     // KONTROL: Bölümdeki tüm segmentler eksiksiz çevrildi mi? (İngilizce kalan veya boş olan var mı?)
                     // Saf yer tutucu/teknik bloklar, adres/kurum bilgileri, e-posta ve kitap adı dışındaki doğal dil blokları denetlenir.
                     var untranslatedCount = segments.Count(s => !s.IsTranslationComplete(package.Title, package.Author));
 
-                    if (untranslatedCount == 0)
+                    bool isPartialLimit = isTestMode || (requestedSectionCount.HasValue && requestedSectionCount.Value > 0 && requestedSectionCount.Value < allSections.Count);
+
+                    if (untranslatedCount == 0 && !isPartialLimit)
                     {
-                        // Kuyruktaki tüm checkpoint kayıtlarının SQLite'a yazıldığını garanti et
                         await checkpointStore.FlushAsync(ct);
+                        await File.WriteAllTextAsync(outputFilePath, finalXhtml, ct);
 
                         // Tamamlanma onay dosyası oluştur ve ara .part dosyasını temizle
                         var doneFilePath = outputFilePath + ".done";
@@ -278,7 +281,10 @@ public sealed class ParallelLocalizationEngine(
                     }
                     else
                     {
-                        _logger.LogWarning("Bölüm '{Chapter}' kısmi çevrildi ({Count} segment eksik veya İngilizce kaldı). .done onayı verilmedi; sonraki çalıştırmada kaldığı yerden devam edilecek.",
+                        // Kısmi / test / eksik durumda yalnızca .part yazılır; yarım dosya nihai EPUB'a girmemesi için _tr.xhtml üretilmez.
+                        await File.WriteAllTextAsync(outputFilePath + ".part", finalXhtml, ct);
+
+                        _logger.LogWarning("Bölüm '{Chapter}' kısmi çevrildi ({Count} segment eksik veya test/kesit limiti). Yalnızca .part yazıldı; sonraki çalıştırmada kaldığı yerden devam edilecek.",
                             chapterFileName, untranslatedCount);
 
                         task.Description = $"[bold yellow]UYARI: {Markup.Escape(chapterFileName)} ({untranslatedCount} blok eksik - .part korundu)[/]";
@@ -303,6 +309,17 @@ public sealed class ParallelLocalizationEngine(
                     }
                     finally
                     {
+                        if (checkpointStore != null)
+                        {
+                            try
+                            {
+                                await checkpointStore.FlushAsync(CancellationToken.None);
+                            }
+                            catch (Exception flushEx)
+                            {
+                                _logger.LogWarning(flushEx, "Checkpoint flush failed in finally for '{Chapter}'.", chapterFileName);
+                            }
+                        }
                         Glossator.AI.Diagnostics.GlossatorDiagnostics.ActiveWorkersCounter.Add(-1);
                     }
                 });

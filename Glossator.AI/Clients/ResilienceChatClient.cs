@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.AI;
@@ -7,8 +8,9 @@ using Microsoft.Extensions.Logging;
 namespace Glossator.AI.Clients;
 
 /// <summary>
-/// LLM API çağrılarında 429 (Too Many Requests), 503 (Service Unavailable), 504 (Gateway Timeout),
-/// 408 (Request Timeout) ve geçici ağ kesintilerini yakalayan, jitter'lı üstel geri çekilme
+/// LLM API çağrılarında 429 (Too Many Requests), 502 (Bad Gateway), 503 (Service Unavailable),
+/// 504 (Gateway Timeout), 408 (Request Timeout), HTTP zaman aşımları ve geçici ağ kesintilerini
+/// yakalayan; Retry-After başlıklarına saygı duyarak üst sınırı korumalı jitter'lı üstel geri çekilme
 /// (exponential backoff) uygulayan kurumsal dayanıklılık istemcisi.
 /// </summary>
 public sealed class ResilienceChatClient(
@@ -17,7 +19,9 @@ public sealed class ResilienceChatClient(
     int maxRetries = 3,
     TimeSpan initialDelay = default) : DelegatingChatClient(innerClient)
 {
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
     private readonly TimeSpan _initialDelay = initialDelay == default ? TimeSpan.FromSeconds(2) : initialDelay;
+    private readonly int _maxAttempts = Math.Max(1, maxRetries);
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -30,17 +34,17 @@ public sealed class ResilienceChatClient(
         {
             try
             {
-                return await base.GetResponseAsync(messages, options, cancellationToken);
+                return await base.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsTransientException(ex) && attempt < maxRetries)
+            catch (Exception ex) when (IsTransientException(ex, cancellationToken) && attempt < _maxAttempts)
             {
-                logger.LogWarning(ex,
-                    "API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F1}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
-                    delay.TotalSeconds, attempt, maxRetries);
+                var waitDelay = ComputeRetryDelay(ex, delay, out delay);
 
-                await Task.Delay(delay, cancellationToken);
-                // Jitter ile üstel geri çekilme (thundering herd koruması)
-                delay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * 2 + Random.Shared.Next(100, 500));
+                logger.LogWarning(ex,
+                    "API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
+                    waitDelay.TotalSeconds, attempt, _maxAttempts);
+
+                await Task.Delay(waitDelay, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -61,21 +65,22 @@ public sealed class ResilienceChatClient(
             {
                 enumerator = base.GetStreamingResponseAsync(messages, options, cancellationToken)
                     .GetAsyncEnumerator(cancellationToken);
-                streamStarted = await enumerator.MoveNextAsync();
+                streamStarted = await enumerator.MoveNextAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsTransientException(ex) && attempt < maxRetries)
+            catch (Exception ex) when (IsTransientException(ex, cancellationToken) && attempt < _maxAttempts)
             {
+                var waitDelay = ComputeRetryDelay(ex, delay, out delay);
+
                 logger.LogWarning(ex,
-                    "Streaming API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F1}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
-                    delay.TotalSeconds, attempt, maxRetries);
+                    "Streaming API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
+                    waitDelay.TotalSeconds, attempt, _maxAttempts);
 
                 if (enumerator != null)
                 {
-                    await enumerator.DisposeAsync();
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
 
-                await Task.Delay(delay, cancellationToken);
-                delay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * 2 + Random.Shared.Next(100, 500));
+                await Task.Delay(waitDelay, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -103,7 +108,7 @@ public sealed class ResilienceChatClient(
 
                     lastUpdate = current;
                     yield return current;
-                    streamStarted = await enumerator.MoveNextAsync();
+                    streamStarted = await enumerator.MoveNextAsync().ConfigureAwait(false);
                 }
 
                 if (latestUsage != null)
@@ -124,7 +129,7 @@ public sealed class ResilienceChatClient(
             {
                 if (enumerator != null)
                 {
-                    await enumerator.DisposeAsync();
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
             }
         }
@@ -162,40 +167,113 @@ public sealed class ResilienceChatClient(
         return uc;
     }
 
-    private static bool IsTransientException(Exception ex)
+    private static TimeSpan ComputeRetryDelay(Exception ex, TimeSpan currentBackoff, out TimeSpan nextBackoff)
     {
-        // 1. İptal sinyali kesinlikle geçici hata sayılamaz (Ctrl+C anında durmalı)
-        if (ex is OperationCanceledException)
+        var cappedCurrent = currentBackoff > MaxRetryDelay ? MaxRetryDelay : currentBackoff;
+        var waitDelay = cappedCurrent;
+
+        if (TryGetRetryAfterDelay(ex, out var retryAfter) && retryAfter > waitDelay)
+        {
+            waitDelay = retryAfter > MaxRetryDelay ? MaxRetryDelay : retryAfter;
+        }
+
+        // Jitter ile üstel geri çekilme (thundering herd koruması) ve üst sınır
+        var nextMs = cappedCurrent.TotalMilliseconds * 2 + Random.Shared.Next(100, 500);
+        nextBackoff = TimeSpan.FromMilliseconds(Math.Min(MaxRetryDelay.TotalMilliseconds, nextMs));
+
+        return waitDelay;
+    }
+
+    private static bool TryGetRetryAfterDelay(Exception ex, out TimeSpan delay)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is ClientResultException cre)
+            {
+                var headers = cre.GetRawResponse()?.Headers;
+                if (headers != null)
+                {
+                    if (headers.TryGetValue("retry-after-ms", out var msRaw)
+                        && double.TryParse(msRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var ms)
+                        && ms > 0)
+                    {
+                        delay = TimeSpan.FromMilliseconds(Math.Min(MaxRetryDelay.TotalMilliseconds, ms));
+                        return true;
+                    }
+
+                    if (headers.TryGetValue("Retry-After", out var rawValue) && !string.IsNullOrWhiteSpace(rawValue))
+                    {
+                        if (double.TryParse(rawValue.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                            && seconds > 0)
+                        {
+                            var secMs = Math.Min(MaxRetryDelay.TotalMilliseconds, seconds * 1000.0);
+                            delay = TimeSpan.FromMilliseconds(secMs);
+                            return true;
+                        }
+
+                        if (DateTimeOffset.TryParse(rawValue, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var retryAt))
+                        {
+                            var delta = retryAt - DateTimeOffset.UtcNow;
+                            if (delta > TimeSpan.Zero)
+                            {
+                                delay = delta > MaxRetryDelay ? MaxRetryDelay : delta;
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        delay = TimeSpan.Zero;
+        return false;
+    }
+
+    private static bool IsTransientException(Exception ex, CancellationToken cancellationToken)
+    {
+        // 1. Çağıranın iptal sinyali kesinlikle geçici hata sayılamaz (Ctrl+C anında durmalı)
+        if (cancellationToken.IsCancellationRequested)
         {
             return false;
         }
 
-        // 2. System.ClientModel (OpenAI SDK) HTTP Durum Kodları
-        if (ex is ClientResultException cre && cre.Status > 0)
+        // Exception zincirini (HttpClient TaskCanceledException(TimeoutException), ClientResultException(SocketException) vb.) denetle
+        if (HasCallerCancellation(ex, cancellationToken))
         {
-            return cre.Status is 429 // TooManyRequests
-                or 503               // ServiceUnavailable
-                or 504               // GatewayTimeout
-                or 408;              // RequestTimeout
+            return false;
         }
 
-        // 3. Standart .NET HttpClient İstisna ve Durum Kodları
-        if (ex is HttpRequestException hre)
+        for (var current = ex; current != null; current = current.InnerException)
         {
-            if (hre.StatusCode.HasValue)
+            // 2. System.ClientModel (OpenAI SDK) HTTP Durum Kodları
+            if (current is ClientResultException cre && cre.Status > 0)
             {
-                var code = (int)hre.StatusCode.Value;
-                return code is 429 or 503 or 504 or 408;
+                return IsTransientStatusCode(cre.Status);
             }
 
-            // Durum kodu yoksa soket veya DNS bağlantı kopmasıdır; tekrar dene
-            return true;
+            // 3. Standart .NET HttpClient İstisna ve Durum Kodları
+            if (current is HttpRequestException hre)
+            {
+                if (hre.StatusCode.HasValue)
+                {
+                    return IsTransientStatusCode((int)hre.StatusCode.Value);
+                }
+
+                // Durum kodu yoksa soket veya DNS bağlantı kopmasıdır; tekrar dene
+                return true;
+            }
+
+            // 4. Ağ zaman aşımları (HttpClient TimeoutException sarmalı dahil), soket veya ham I/O akış kopmaları
+            if (current is TimeoutException or SocketException || current.GetType() == typeof(IOException))
+            {
+                return true;
+            }
         }
 
-        // 4. Zaman aşımı ve soket istisnaları
-        if (ex is TimeoutException or SocketException)
+        // Salt iptal (içinde TimeoutException yoksa) yeniden denenmez
+        if (ex is OperationCanceledException)
         {
-            return true;
+            return false;
         }
 
         // 5. İkincil Fallback: Durum kodu fırlatmayan özel LLM proxy sunucuları için metin araması
@@ -204,8 +282,33 @@ public sealed class ResilienceChatClient(
             || message.Contains("TooManyRequests", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Rate limit", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Quota", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("502", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Bad Gateway", StringComparison.OrdinalIgnoreCase)
             || message.Contains("503", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Service Unavailable", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("504", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Gateway Timeout", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTransientStatusCode(int statusCode) => statusCode is
+        408 // RequestTimeout
+        or 429 // TooManyRequests
+        or 502 // BadGateway
+        or 503 // ServiceUnavailable
+        or 504; // GatewayTimeout
+
+    private static bool HasCallerCancellation(Exception ex, CancellationToken callerToken)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is OperationCanceledException oce
+                && oce.CancellationToken.CanBeCanceled
+                && oce.CancellationToken == callerToken)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

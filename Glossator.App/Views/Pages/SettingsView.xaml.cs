@@ -80,24 +80,31 @@ public partial class SettingsView : UserControl
 
     private async void CmbPromptFiles_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_syncingPromptCombo || _boundVm == null || CmbPromptFiles.SelectedItem is not string targetFile)
-            return;
-
-        if (targetFile == _boundVm.SelectedPromptFile)
-            return;
-
-        bool switched = await _boundVm.TrySwitchPromptAsync(targetFile);
-        if (!switched)
+        try
         {
-            _syncingPromptCombo = true;
-            try
+            if (_syncingPromptCombo || _boundVm == null || CmbPromptFiles.SelectedItem is not string targetFile)
+                return;
+
+            if (targetFile == _boundVm.SelectedPromptFile)
+                return;
+
+            bool switched = await _boundVm.TrySwitchPromptAsync(targetFile);
+            if (!switched)
             {
-                CmbPromptFiles.SelectedItem = _boundVm.SelectedPromptFile;
+                _syncingPromptCombo = true;
+                try
+                {
+                    CmbPromptFiles.SelectedItem = _boundVm.SelectedPromptFile;
+                }
+                finally
+                {
+                    _syncingPromptCombo = false;
+                }
             }
-            finally
-            {
-                _syncingPromptCombo = false;
-            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"CmbPromptFiles_SelectionChanged error: {ex}");
         }
     }
 }

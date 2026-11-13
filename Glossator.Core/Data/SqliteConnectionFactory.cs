@@ -2,7 +2,7 @@ namespace Glossator.Core.Data;
 
 using Microsoft.Data.Sqlite;
 
-public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
+public sealed class SqliteConnectionFactory : ISqliteConnectionFactory, IDisposable
 {
     private readonly string _connectionString;
     private readonly SemaphoreSlim _initLock = new(1, 1);
@@ -17,6 +17,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
             DataSource = dbPath,
             DefaultTimeout = 30,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            ForeignKeys = true,
             Pooling = true
         };
         _connectionString = builder.ToString();
@@ -26,20 +27,19 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
     {
         if (!_initialized)
         {
-            await InitializeDatabaseAsync(cancellationToken);
+            await InitializeDatabaseAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         // Her bağlantıda zorunlu connection-level interceptor pragmaları
         await using var pragmaCmd = connection.CreateCommand();
         pragmaCmd.CommandText = """
             PRAGMA busy_timeout = 30000;
-            PRAGMA foreign_keys = ON;
             PRAGMA synchronous = NORMAL;
             """;
-        await pragmaCmd.ExecuteNonQueryAsync(cancellationToken);
+        await pragmaCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         return connection;
     }
@@ -48,7 +48,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
     {
         if (!_initialized)
         {
-            InitializeDatabaseAsync(CancellationToken.None).GetAwaiter().GetResult();
+            InitializeDatabaseAsync(CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
         }
 
         var connection = new SqliteConnection(_connectionString);
@@ -57,7 +57,6 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
         using var pragmaCmd = connection.CreateCommand();
         pragmaCmd.CommandText = """
             PRAGMA busy_timeout = 30000;
-            PRAGMA foreign_keys = ON;
             PRAGMA synchronous = NORMAL;
             """;
         pragmaCmd.ExecuteNonQuery();
@@ -72,7 +71,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
             return;
         }
 
-        await _initLock.WaitAsync(cancellationToken);
+        await _initLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (_initialized)
@@ -81,12 +80,12 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
             }
 
             await using var connection = new SqliteConnection(_connectionString);
-            await connection.OpenAsync(cancellationToken);
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-            // Veritabanı dosyası düzeyinde bir defalık WAL modu
+            // Veritabanı düzeyinde bir defalık WAL modu
             await using var walCmd = connection.CreateCommand();
             walCmd.CommandText = "PRAGMA journal_mode = WAL;";
-            await walCmd.ExecuteNonQueryAsync(cancellationToken);
+            await walCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
             const string ddl = """
                 CREATE TABLE IF NOT EXISTS Terms (
@@ -119,14 +118,14 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
 
             await using var schemaCmd = connection.CreateCommand();
             schemaCmd.CommandText = ddl;
-            await schemaCmd.ExecuteNonQueryAsync(cancellationToken);
+            await schemaCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
-            // Geriye dönük uyumluluk: Eğer SegmentCheckpoints tablosunda BookId kolonu yoksa otomatik taşı
+            // Geriye dönük uyumluluk: Eğer SegmentCheckpoints tablosunda BookId kolonu yoksa transaction içinde atomik taşı
             await using var checkColCmd = connection.CreateCommand();
             checkColCmd.CommandText = "PRAGMA table_info(SegmentCheckpoints);";
-            await using var reader = await checkColCmd.ExecuteReaderAsync(cancellationToken);
+            await using var reader = await checkColCmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var hasBookId = false;
-            while (await reader.ReadAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var colName = reader.GetString(1);
                 if (colName.Equals("BookId", StringComparison.OrdinalIgnoreCase))
@@ -135,7 +134,7 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
                     break;
                 }
             }
-            await reader.CloseAsync();
+            await reader.CloseAsync().ConfigureAwait(false);
 
             if (!hasBookId)
             {
@@ -158,15 +157,18 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
                     DROP TABLE SegmentCheckpoints;
                     ALTER TABLE SegmentCheckpoints_Migrated RENAME TO SegmentCheckpoints;
                     """;
+                await using var tx = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
                 await using var migrateCmd = connection.CreateCommand();
+                migrateCmd.Transaction = (SqliteTransaction)tx;
                 migrateCmd.CommandText = migrateDdl;
-                await migrateCmd.ExecuteNonQueryAsync(cancellationToken);
+                await migrateCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
 
             // BookId kolonu garanti edildikten sonra index oluşturulur
             await using var indexCmd = connection.CreateCommand();
             indexCmd.CommandText = "CREATE INDEX IF NOT EXISTS idx_checkpoints_book_chapter ON SegmentCheckpoints(BookId, ChapterFile);";
-            await indexCmd.ExecuteNonQueryAsync(cancellationToken);
+            await indexCmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
             _initialized = true;
         }
@@ -174,5 +176,10 @@ public sealed class SqliteConnectionFactory : ISqliteConnectionFactory
         {
             _initLock.Release();
         }
+    }
+
+    public void Dispose()
+    {
+        _initLock.Dispose();
     }
 }

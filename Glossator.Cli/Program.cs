@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Glossator.AI.Configuration;
 using Glossator.AI.Extensions;
 using Glossator.Cli.Commands.Glossary;
@@ -96,24 +97,35 @@ AnsiConsole.Write(
 AnsiConsole.MarkupLine("[bold cyan]Microsoft Agent Framework (.NET 10) Tabanlı Kitap Yerelleştirme Boru Hattı[/]");
 AnsiConsole.MarkupLine("[dim]Geliştirici: Emre Dalbudak  •  GitHub: https://github.com/chela98  •  LinkedIn: https://www.linkedin.com/in/emre-dalbudak/[/]\n");
 
-// Graceful Shutdown & Cancellation Yönetimi (Ctrl+C / SIGINT)
+// Graceful Shutdown & Cancellation Yönetimi (Ctrl+C / SIGINT / SIGTERM / SIGHUP)
 using var cts = new CancellationTokenSource();
 CancellationTokenSource? currentRunCts = null;
+
+void RequestGracefulCancel(string source)
+{
+    var activeRun = Volatile.Read(ref currentRunCts);
+    if (activeRun != null && !activeRun.IsCancellationRequested)
+    {
+        AnsiConsole.MarkupLine($"\n[bold yellow]İptal ({Markup.Escape(source)}):[/] Devam eden çeviri işlemi durduruluyor...");
+        activeRun.Cancel();
+    }
+    else if (!cts.IsCancellationRequested)
+    {
+        AnsiConsole.MarkupLine($"\n[bold yellow]Çıkış ({Markup.Escape(source)}):[/] Uygulama kapatılıyor...");
+        cts.Cancel();
+    }
+}
 
 Console.CancelKeyPress += (sender, eventArgs) =>
 {
     eventArgs.Cancel = true;
-    if (currentRunCts != null && !currentRunCts.IsCancellationRequested)
-    {
-        AnsiConsole.MarkupLine("\n[bold yellow]İptal:[/] Devam eden çeviri işlemi durduruluyor...");
-        currentRunCts.Cancel();
-    }
-    else
-    {
-        AnsiConsole.MarkupLine("\n[bold yellow]Çıkış:[/] Uygulama kapatılıyor...");
-        cts.Cancel();
-    }
+    RequestGracefulCancel("SIGINT");
 };
+
+using var sigTermRegistration = TryRegisterPosixSignal(PosixSignal.SIGTERM, () => RequestGracefulCancel("SIGTERM"));
+using var sigHupRegistration = TryRegisterPosixSignal(PosixSignal.SIGHUP, () => RequestGracefulCancel("SIGHUP"));
+
+IHost? host = null;
 
 try
 {
@@ -238,8 +250,14 @@ try
     var config = hostBuilder.Configuration;
 
     // OpenTelemetry Kurulumu
+    // Gizlilik gereği ham metin/prompt içerikleri varsayılan olarak kapalıdır; yalnızca yapılandırmayla açılır.
     AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-    Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true");
+    var captureSensitive = config.GetValue<bool>("OpenTelemetry:CaptureMessageContent")
+                           || config.GetValue<bool>("GlossatorAi:EnableSensitiveTelemetry");
+    if (captureSensitive)
+    {
+        Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true");
+    }
 
     var otelEndpoint = config["OpenTelemetry:Endpoint"] ?? "http://localhost:4317";
     var serviceName = config["OpenTelemetry:ServiceName"] ?? "Glossator.Cli";
@@ -255,6 +273,7 @@ try
         {
             opt.Endpoint = new Uri(otelEndpoint);
             opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+            opt.TimeoutMilliseconds = 1500;
         });
     });
 
@@ -271,6 +290,7 @@ try
             {
                 opt.Endpoint = new Uri(otelEndpoint);
                 opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+                opt.TimeoutMilliseconds = 1500;
             }))
         .WithMetrics(metrics => metrics
             .AddMeter(Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName)
@@ -282,6 +302,7 @@ try
             {
                 opt.Endpoint = new Uri(otelEndpoint);
                 opt.Protocol = OpenTelemetry.Exporter.OtlpExportProtocol.Grpc;
+                opt.TimeoutMilliseconds = 1500;
             }));
 
     // API Yapılandırması ve Güvenlik Denetimi
@@ -397,12 +418,13 @@ try
     hostBuilder.Services.Configure<GlossatorAiOptions>(opts =>
     {
         opts.ActiveProvider = aiOptions.ActiveProvider;
+        opts.EnableSensitiveTelemetry = aiOptions.EnableSensitiveTelemetry;
         opts.Providers = aiOptions.Providers;
         opts.Agents = aiOptions.Agents;
     });
     hostBuilder.Services.AddGlossatorAiClients();
 
-    using var host = hostBuilder.Build();
+    host = hostBuilder.Build();
     await host.StartAsync(cts.Token);
     var engine = host.Services.GetRequiredService<ParallelLocalizationEngine>();
 
@@ -414,7 +436,6 @@ try
         try
         {
             await engine.RunAsync(package, targetChapters, concurrency, isFresh, requestedSectionCount, isTestMode, cts.Token);
-            await host.StopAsync();
             return 0;
         }
         catch (Exception ex)
@@ -775,12 +796,11 @@ try
         }
     }
 
-    await host.StopAsync();
     return 0;
 }
 catch (OperationCanceledException)
 {
-    AnsiConsole.MarkupLine("\n[bold red]İşlem kullanıcı tarafından durduruldu (Ctrl+C).[/]");
+    AnsiConsole.MarkupLine("\n[bold red]İşlem kullanıcı tarafından durduruldu (Ctrl+C / SIGTERM).[/]");
     AnsiConsole.MarkupLine("[dim]In-flight LLM HTTP istekleri derhal kesildi, token yakılması önlendi, veritabanı tutarlılığı korundu.[/]\n");
     return 130;
 }
@@ -789,6 +809,71 @@ catch (Exception ex)
     AnsiConsole.MarkupLine($"\n[bold red]HATA:[/] {Markup.Escape(ex.Message)}");
     AnsiConsole.WriteException(ex);
     return 1;
+}
+finally
+{
+    await ShutdownCliHostAsync(host);
+}
+
+static PosixSignalRegistration? TryRegisterPosixSignal(PosixSignal signal, Action onSignal)
+{
+    try
+    {
+        return PosixSignalRegistration.Create(signal, context =>
+        {
+            context.Cancel = true;
+            onSignal();
+        });
+    }
+    catch (PlatformNotSupportedException)
+    {
+        return null;
+    }
+}
+
+static async Task ShutdownCliHostAsync(IHost? host)
+{
+    if (host == null)
+    {
+        return;
+    }
+
+    try
+    {
+        if (host.Services.GetService<CheckpointStore>() is { } checkpointStore)
+        {
+            using var flushCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            await checkpointStore.DisposeAsync().AsTask().WaitAsync(flushCts.Token).ConfigureAwait(false);
+        }
+    }
+    catch { }
+
+    try
+    {
+        host.Services.GetService<TracerProvider>()?.ForceFlush(1000);
+        host.Services.GetService<MeterProvider>()?.ForceFlush(1000);
+    }
+    catch { }
+
+    try
+    {
+        using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await host.StopAsync(stopCts.Token).ConfigureAwait(false);
+    }
+    catch { }
+
+    try
+    {
+        if (host is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            host.Dispose();
+        }
+    }
+    catch { }
 }
 
 static List<EpubItem> GetTranslatableDocuments(EpubPackage package)

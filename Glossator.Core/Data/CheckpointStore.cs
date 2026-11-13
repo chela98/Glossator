@@ -172,11 +172,15 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                 {
                     try
                     {
-                        await PersistBatchAsync(batch, CancellationToken.None);
+                        await PersistBatchAsync(batch, CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
                         _lastPersistError = ex;
+                    }
+                    finally
+                    {
+                        batch.Clear();
                     }
                 }
             }
@@ -197,18 +201,21 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                 {
                     try
                     {
-                        await PersistBatchAsync(batch, CancellationToken.None);
+                        await PersistBatchAsync(batch, CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
                         _lastPersistError = ex;
                     }
-                    batch.Clear();
+                    finally
+                    {
+                        batch.Clear();
+                    }
                 }
             }
             else if (remainingItem is FlushCommand flush)
             {
-                await HandleFlushCommandAsync(flush, batch);
+                await HandleFlushCommandAsync(flush, batch).ConfigureAwait(false);
             }
         }
 
@@ -216,11 +223,15 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         {
             try
             {
-                await PersistBatchAsync(batch, CancellationToken.None);
+                await PersistBatchAsync(batch, CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _lastPersistError = ex;
+            }
+            finally
+            {
+                batch.Clear();
             }
         }
     }
@@ -231,8 +242,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         {
             if (batch.Count > 0)
             {
-                await PersistBatchAsync(batch, CancellationToken.None);
-                batch.Clear();
+                await PersistBatchAsync(batch, CancellationToken.None).ConfigureAwait(false);
             }
 
             if (_lastPersistError != null)
@@ -251,6 +261,10 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
             _lastPersistError = null;
             flush.Tcs.TrySetException(ex);
         }
+        finally
+        {
+            batch.Clear();
+        }
     }
 
     private async Task PersistBatchAsync(List<SegmentCheckpoint> checkpoints, CancellationToken ct)
@@ -260,8 +274,8 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         {
             try
             {
-                await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-                await using var transaction = await connection.BeginTransactionAsync(ct);
+                await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
 
                 const string sql = """
                     INSERT INTO SegmentCheckpoints (BookId, ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt)
@@ -275,43 +289,47 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                         UpdatedAt = excluded.UpdatedAt;
                     """;
 
+                await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+                var pBookId = cmd.Parameters.Add("@BookId", SqliteType.Text);
+                var pChapterFile = cmd.Parameters.Add("@ChapterFile", SqliteType.Text);
+                var pSegmentIndex = cmd.Parameters.Add("@SegmentIndex", SqliteType.Integer);
+                var pOriginalHash = cmd.Parameters.Add("@OriginalHash", SqliteType.Text);
+                var pTagName = cmd.Parameters.Add("@TagName", SqliteType.Text);
+                var pOriginalText = cmd.Parameters.Add("@OriginalText", SqliteType.Text);
+                var pTranslatedText = cmd.Parameters.Add("@TranslatedText", SqliteType.Text);
+                var pStageStatus = cmd.Parameters.Add("@StageStatus", SqliteType.Text);
+                var pUpdatedAt = cmd.Parameters.Add("@UpdatedAt", SqliteType.Text);
+                await cmd.PrepareAsync(ct).ConfigureAwait(false);
+
                 foreach (var cp in checkpoints)
                 {
-                    await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
-                    cmd.Parameters.AddWithValue("@BookId", string.IsNullOrWhiteSpace(cp.BookId) ? "default" : cp.BookId);
-                    cmd.Parameters.AddWithValue("@ChapterFile", cp.ChapterFile);
-                    cmd.Parameters.AddWithValue("@SegmentIndex", cp.SegmentIndex);
-                    cmd.Parameters.AddWithValue("@OriginalHash", cp.OriginalHash);
-                    cmd.Parameters.AddWithValue("@TagName", cp.TagName);
-                    cmd.Parameters.AddWithValue("@OriginalText", cp.OriginalText);
-                    cmd.Parameters.AddWithValue("@TranslatedText", cp.TranslatedText);
-                    cmd.Parameters.AddWithValue("@StageStatus", cp.StageStatus);
-                    cmd.Parameters.AddWithValue("@UpdatedAt", cp.UpdatedAt.ToString("o"));
-                    await cmd.ExecuteNonQueryAsync(ct);
+                    pBookId.Value = string.IsNullOrWhiteSpace(cp.BookId) ? "default" : cp.BookId;
+                    pChapterFile.Value = cp.ChapterFile;
+                    pSegmentIndex.Value = cp.SegmentIndex;
+                    pOriginalHash.Value = cp.OriginalHash;
+                    pTagName.Value = cp.TagName;
+                    pOriginalText.Value = cp.OriginalText;
+                    pTranslatedText.Value = cp.TranslatedText;
+                    pStageStatus.Value = cp.StageStatus;
+                    pUpdatedAt.Value = cp.UpdatedAt.ToString("o");
+                    await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 }
 
-                await transaction.CommitAsync(ct);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
                 return;
             }
             catch (SqliteException ex) when (attempt < maxRetries && (ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6))
             {
                 _logger.LogWarning(ex, "SQLite veritabanı geçici olarak meşgul/kilitli ({ErrorCode}), {Attempt}. deneme sonrası {Delay}ms bekleniyor...",
                     ex.SqliteErrorCode, attempt, attempt * 100);
-                await Task.Delay(attempt * 100, ct);
+                await Task.Delay(attempt * 100, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                if (attempt == maxRetries)
-                {
-                    _logger.LogError(ex, "Checkpoint batch yazımı {MaxRetries} deneme sonrasında başarısız oldu ({Count} checkpoint atlandı): {Message}",
-                        maxRetries, checkpoints.Count, ex.Message);
-                    _lastPersistError = ex;
-                    throw;
-                }
-                else
-                {
-                    await Task.Delay(attempt * 100, ct);
-                }
+                _logger.LogError(ex, "Checkpoint batch yazımı başarısız oldu ({Count} checkpoint atlandı): {Message}",
+                    checkpoints.Count, ex.Message);
+                _lastPersistError = ex;
+                throw;
             }
         }
     }

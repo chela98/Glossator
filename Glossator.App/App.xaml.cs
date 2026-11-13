@@ -23,11 +23,15 @@ namespace Glossator.App;
 public partial class App : Application
 {
     private IHost? _host;
+    private bool _globalExceptionHandlersRegistered;
 
     public static IServiceProvider Services { get; private set; } = null!;
 
     private async void Application_Startup(object sender, StartupEventArgs e)
     {
+        var isSmokeTest = string.Equals(Environment.GetEnvironmentVariable("GLOSSATOR_SMOKE_TEST"), "1", StringComparison.Ordinal);
+        RegisterGlobalExceptionHandlers(isSmokeTest);
+
         try
         {
             var builder = Host.CreateApplicationBuilder(e.Args);
@@ -46,8 +50,14 @@ public partial class App : Application
             themeService.ApplyTheme(preferDark);
 
             // OpenTelemetry Kurulumu (Docker Aspire Dashboard)
+            // Ham prompt/çeviri içerikleri gizlilik gereği varsayılan olarak kapalıdır; yalnızca yapılandırmayla açılır.
             AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
-            Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true");
+            var captureSensitive = config.GetValue<bool>("OpenTelemetry:CaptureMessageContent")
+                                   || config.GetValue<bool>("GlossatorAi:EnableSensitiveTelemetry");
+            if (captureSensitive)
+            {
+                Environment.SetEnvironmentVariable("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true");
+            }
 
             var otelEndpoint = config["OpenTelemetry:Endpoint"];
             if (string.IsNullOrWhiteSpace(otelEndpoint)) otelEndpoint = "http://localhost:4317";
@@ -146,21 +156,15 @@ public partial class App : Application
             // Başlangıçta Master Sözlük seed & temizlik (CLI ile uyumlu)
             await repo.SeedDefaultTurkishTranslationsAsync();
 
-            var shellWindow = _host.Services.GetRequiredService<Glossator.App.Views.ShellWindow>();
-            if (string.Equals(Environment.GetEnvironmentVariable("GLOSSATOR_SMOKE_TEST"), "1", StringComparison.Ordinal))
+            if (_host.Services.GetService<ILogger<App>>() is { } appLogger)
             {
-                DispatcherUnhandledException += (_, args) =>
-                {
-                    try
-                    {
-                        var logPath = Path.Combine(GlossatorPaths.GetGlossatorHomeDirectory(), "startup_error.log");
-                        File.WriteAllText(logPath, args.Exception.ToString());
-                    }
-                    catch { }
-                    args.Handled = true;
-                    Shutdown(-1);
-                };
+                Glossator.App.ViewModels.AsyncRelayCommand.UnhandledExceptionHandler = ex =>
+                    appLogger.LogError(ex, "İşlenmemiş AsyncRelayCommand hatası");
+            }
 
+            var shellWindow = _host.Services.GetRequiredService<Glossator.App.Views.ShellWindow>();
+            if (isSmokeTest)
+            {
                 shellWindow.Show();
                 await Task.Delay(1200);
                 var shellVm = _host.Services.GetRequiredService<Glossator.App.ViewModels.ShellViewModel>();
@@ -180,14 +184,9 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
-            try
-            {
-                var logPath = System.IO.Path.Combine(GlossatorPaths.GetGlossatorHomeDirectory(), "startup_error.log");
-                await System.IO.File.WriteAllTextAsync(logPath, ex.ToString());
-            }
-            catch { }
+            WriteCrashLog("startup_error.log", ex);
 
-            if (!string.Equals(Environment.GetEnvironmentVariable("GLOSSATOR_SMOKE_TEST"), "1", StringComparison.Ordinal))
+            if (!isSmokeTest)
             {
                 var detail = ex.InnerException != null ? $"{ex.Message}\n\nDetay: {ex.InnerException.Message}" : ex.Message;
                 MessageBox.Show(
@@ -200,7 +199,76 @@ public partial class App : Application
         }
     }
 
-    private void Application_Exit(object sender, ExitEventArgs e)
+    private void RegisterGlobalExceptionHandlers(bool isSmokeTest)
+    {
+        if (_globalExceptionHandlersRegistered)
+            return;
+
+        _globalExceptionHandlersRegistered = true;
+
+        DispatcherUnhandledException += (_, args) =>
+        {
+            if (args.Exception is OutOfMemoryException or StackOverflowException)
+                return;
+
+            TryLogHostException("DispatcherUnhandledException", args.Exception);
+            WriteCrashLog("unhandled_error.log", args.Exception);
+            args.Handled = true;
+
+            if (isSmokeTest)
+            {
+                Shutdown(-1);
+                return;
+            }
+
+            MessageBox.Show(
+                $"Beklenmeyen bir arayüz hatası yakalandı:\n\n{args.Exception.Message}\n\nAyrıntılar ~/.glossator/unhandled_error.log dosyasına yazıldı.",
+                "Beklenmeyen Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            if (args.ExceptionObject is Exception ex)
+            {
+                TryLogHostException("AppDomain.UnhandledException", ex);
+                WriteCrashLog("unhandled_error.log", ex);
+            }
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            TryLogHostException("TaskScheduler.UnobservedTaskException", args.Exception);
+            WriteCrashLog("unhandled_error.log", args.Exception);
+            args.SetObserved();
+        };
+    }
+
+    private void TryLogHostException(string source, Exception ex)
+    {
+        try
+        {
+            _host?.Services.GetService<ILogger<App>>()?.LogError(ex, "Global yakalanan istisna ({Source})", source);
+        }
+        catch { }
+    }
+
+    private static void WriteCrashLog(string fileName, Exception ex)
+    {
+        try
+        {
+            var logPath = Path.Combine(GlossatorPaths.GetGlossatorHomeDirectory(), fileName);
+            File.WriteAllText(logPath, $"[{DateTimeOffset.Now:O}] {ex}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Pencere kapanışı sırasında CheckpointStore, OTel provider ve DI Host'u UI'ı kilitlemeden async kapatır.
+    /// İkinci çağrılar idempotent biçimde no-op döner.
+    /// </summary>
+    internal async Task ShutdownHostAsync()
     {
         var host = Interlocked.Exchange(ref _host, null);
         if (host == null)
@@ -208,49 +276,61 @@ public partial class App : Application
             return;
         }
 
-        // Yerel SQLite checkpoint deposunu bekletmeden güvenli boşalt, ardından
-        // Aspire/OTLP kapalıyken arayüzün asılı kalmaması için host durdurmasını kısa tut.
         try
         {
-            Task.Run(async () =>
+            if (host.Services.GetService<CheckpointStore>() is { } checkpointStore)
             {
-                try
-                {
-                    if (host.Services.GetService<CheckpointStore>() is { } checkpointStore)
-                    {
-                        await checkpointStore.DisposeAsync().ConfigureAwait(false);
-                    }
-                }
-                catch { }
+                using var disposeCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                await checkpointStore.DisposeAsync().AsTask().WaitAsync(disposeCts.Token).ConfigureAwait(false);
+            }
+        }
+        catch { }
 
-                try
-                {
-                    host.Services.GetService<Glossator.App.Infrastructure.StudioTelemetryMonitor>()?.Dispose();
-                }
-                catch { }
-            }).Wait(TimeSpan.FromSeconds(1));
+        try
+        {
+            host.Services.GetService<Glossator.App.Infrastructure.StudioTelemetryMonitor>()?.Dispose();
+        }
+        catch { }
 
-            Task.Run(async () =>
+        try
+        {
+            host.Services.GetService<TracerProvider>()?.ForceFlush(1000);
+            host.Services.GetService<MeterProvider>()?.ForceFlush(1000);
+        }
+        catch { }
+
+        try
+        {
+            await host.StopAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+        }
+        catch { }
+
+        try
+        {
+            if (host is IAsyncDisposable asyncDisposable)
             {
-                try
-                {
-                    await host.StopAsync(TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
-                }
-                catch { }
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                host.Dispose();
+            }
+        }
+        catch { }
+    }
 
-                try
-                {
-                    if (host is IAsyncDisposable asyncDisposable)
-                    {
-                        await asyncDisposable.DisposeAsync().ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        host.Dispose();
-                    }
-                }
-                catch { }
-            }).Wait(TimeSpan.FromMilliseconds(250));
+    private void Application_Exit(object sender, ExitEventArgs e)
+    {
+        // Normal kapanışta ShellWindow_Closing ShutdownHostAsync()'i çoktan tamamlamıştır.
+        // Bu fallback yalnızca pencere dışından Shutdown(...) çağrıldığı durumlarda (örn. smoke test) devreye girer.
+        if (_host == null)
+        {
+            return;
+        }
+
+        try
+        {
+            Task.Run(ShutdownHostAsync).Wait(TimeSpan.FromSeconds(3));
         }
         catch
         {

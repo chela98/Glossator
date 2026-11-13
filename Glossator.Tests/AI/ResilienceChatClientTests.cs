@@ -1,3 +1,7 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
+using System.Diagnostics;
+using System.Net;
 using Glossator.AI.Clients;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -345,6 +349,146 @@ public class ResilienceChatClientTests
                     ]
                 };
             }
+        }
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenHttp502BadGatewayOccurs_RetriesAndSucceeds()
+    {
+        var attemptCount = 0;
+        var mockClient = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+            {
+                throw new HttpRequestException("Bad Gateway", null, HttpStatusCode.BadGateway);
+            }
+
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "502 Sonrası Başarılı")));
+        });
+
+        var client = new ResilienceChatClient(
+            mockClient,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Test")]);
+
+        Assert.Equal("502 Sonrası Başarılı", response.Text);
+        Assert.Equal(2, attemptCount);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenTaskCanceledWrapsTimeoutWithoutCallerCancel_RetriesAndSucceeds()
+    {
+        var attemptCount = 0;
+        var mockClient = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+            {
+                throw new TaskCanceledException("HttpClient network timeout", new TimeoutException("Request timed out"));
+            }
+
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Timeout Sonrası Başarılı")));
+        });
+
+        var client = new ResilienceChatClient(
+            mockClient,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Test")]);
+
+        Assert.Equal("Timeout Sonrası Başarılı", response.Text);
+        Assert.Equal(2, attemptCount);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenClientResultExceptionHasRetryAfterMs_HonorsHeaderAndRetries()
+    {
+        var attemptCount = 0;
+        var mockClient = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+            {
+                var raw = new MockPipelineResponse(429, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["retry-after-ms"] = "75"
+                });
+                throw new ClientResultException("Too Many Requests", raw);
+            }
+
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Retry-After Sonrası Başarılı")));
+        });
+
+        var client = new ResilienceChatClient(
+            mockClient,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        var sw = Stopwatch.StartNew();
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Test")]);
+        sw.Stop();
+
+        Assert.Equal("Retry-After Sonrası Başarılı", response.Text);
+        Assert.Equal(2, attemptCount);
+        Assert.True(sw.ElapsedMilliseconds >= 55, $"Expected Retry-After delay (>=55ms), observed {sw.ElapsedMilliseconds}ms");
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenClientResult400HasQuotaText_ThrowsWithoutRetrying()
+    {
+        var attemptCount = 0;
+        var mockClient = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            var raw = new MockPipelineResponse(400);
+            throw new ClientResultException("Invalid prompt: Quota word mentioned in BadRequest", raw);
+        });
+
+        var client = new ResilienceChatClient(
+            mockClient,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        await Assert.ThrowsAsync<ClientResultException>(() =>
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "Test")]));
+
+        Assert.Equal(1, attemptCount);
+    }
+
+    private sealed class MockPipelineResponse(int status, Dictionary<string, string>? headers = null) : PipelineResponse
+    {
+        private readonly MockPipelineResponseHeaders _headers = new(headers ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+        public override int Status => status;
+        public override string ReasonPhrase => string.Empty;
+        protected override PipelineResponseHeaders HeadersCore => _headers;
+        public override BinaryData Content => BinaryData.Empty;
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => BinaryData.Empty;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) => ValueTask.FromResult(BinaryData.Empty);
+        public override void Dispose() { }
+    }
+
+    private sealed class MockPipelineResponseHeaders(Dictionary<string, string> headers) : PipelineResponseHeaders
+    {
+        public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() => headers.GetEnumerator();
+        public override bool TryGetValue(string name, out string? value) => headers.TryGetValue(name, out value);
+        public override bool TryGetValues(string name, out IEnumerable<string>? values)
+        {
+            if (headers.TryGetValue(name, out var v))
+            {
+                values = [v];
+                return true;
+            }
+            values = null;
+            return false;
         }
     }
 }

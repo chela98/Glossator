@@ -207,29 +207,36 @@ public sealed class GlossaryViewModel : ObservableObject, IDisposable
     {
         if (_isLoading || sender is not GlossaryTermViewModel vm) return;
 
-        await _saveLock.WaitAsync();
         try
         {
-            if (vm.Id > 0)
+            await _saveLock.WaitAsync();
+            try
             {
-                await _repo.UpdateTermManualAsync(vm.ToModel());
-            }
-            else
-            {
-                await _repo.AddOrUpdateTermAsync(vm.ToModel());
-            }
+                if (vm.Id > 0)
+                {
+                    await _repo.UpdateTermManualAsync(vm.ToModel());
+                }
+                else
+                {
+                    await _repo.AddOrUpdateTermAsync(vm.ToModel());
+                }
 
-            UpdateCounts();
-            SaveStatusText = $"Kaydedildi: {vm.EnglishTerm} -> {vm.TurkishTerm ?? "(boş)"}";
+                UpdateCounts();
+                SaveStatusText = $"Kaydedildi: {vm.EnglishTerm} -> {vm.TurkishTerm ?? "(boş)"}";
+            }
+            finally
+            {
+                _saveLock.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // İşlem iptal edildi
         }
         catch (Exception ex)
         {
             SaveStatusText = "Kayıt hatası oluştu.";
             _bannerService.Show("Terim Güncellenemedi", ex.Message, InfoBarSeverity.Error);
-        }
-        finally
-        {
-            _saveLock.Release();
         }
     }
 

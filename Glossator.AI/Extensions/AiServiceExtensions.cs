@@ -102,11 +102,15 @@ public static class AiServiceExtensions
             // ÖNEMLİ SIRALAMA KURALI (ChatClientBuilder Dıştan İçe Sarmalar):
             // 1. İlk eklenen middleware EN DIŞ katmandır (StreamingChatHelper'a en yakın).
             // 2. Son eklenen middleware EN İÇ katmandır (OpenAIChatClient'a en yakın).
+            var config = sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
+            var enableSensitiveData = ResolveSensitiveTelemetryEnabled(options, config);
+
             // OpenTelemetry en dışta olmalıdır ki ResilienceChatClient'ın tekilleştirip normalize ettiği
             // nihai UsageContent (input/output/reasoning token) paketini eksiksiz yakalayabilsin.
+            // Ham prompt/metin içerikleri varsayılan olarak gizlidir (CaptureMessageContent/EnableSensitiveTelemetry ile açılabilir).
             var builder = innerClient
                 .AsBuilder()
-                .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = true);
+                .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = enableSensitiveData);
 
             // Microsoft.Extensions.AI Resmi Loglama Ara Yazılımı
             var loggerFactory = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
@@ -167,10 +171,13 @@ public static class AiServiceExtensions
         var reviewer = services.GetRequiredKeyedService<IChatClient>(KeyReviewer);
         var postProcessor = services.GetRequiredService<Glossator.Core.Rules.TermGlossingPostProcessor>();
         var logger = services.GetService<Microsoft.Extensions.Logging.ILogger<BookLocalizationPipeline>>();
+        var aiOptions = services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
+        var config = services.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
+        var enableSensitiveTelemetry = ResolveSensitiveTelemetryEnabled(aiOptions, config);
 
-        var stylePrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("StyleAnalystPrompt.md", cancellationToken);
-        var translatorPrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("TranslatorPrompt.md", cancellationToken);
-        var reviewerPrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("ReviewerPrompt.md", cancellationToken);
+        var stylePrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("StyleAnalystPrompt.md", cancellationToken).ConfigureAwait(false);
+        var translatorPrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("TranslatorPrompt.md", cancellationToken).ConfigureAwait(false);
+        var reviewerPrompt = await Glossator.AI.Prompts.PromptLoader.LoadPromptAsync("ReviewerPrompt.md", cancellationToken).ConfigureAwait(false);
 
         return new BookLocalizationPipeline(
             styleAnalyst,
@@ -180,6 +187,15 @@ public static class AiServiceExtensions
             stylePrompt,
             translatorPrompt,
             reviewerPrompt,
-            logger);
+            logger,
+            enableSensitiveTelemetry);
+    }
+
+    private static bool ResolveSensitiveTelemetryEnabled(
+        GlossatorAiOptions? aiOptions,
+        Microsoft.Extensions.Configuration.IConfiguration? config)
+    {
+        var captureFromOtel = bool.TryParse(config?["OpenTelemetry:CaptureMessageContent"], out var parsed) && parsed;
+        return (aiOptions?.EnableSensitiveTelemetry ?? false) || captureFromOtel;
     }
 }

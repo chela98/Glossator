@@ -27,21 +27,21 @@ public partial class ShellWindow : FluentWindow
 
     private async void ShellWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        await _viewModel.InitializeAsync();
+        try
+        {
+            await _viewModel.InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"ShellWindow_Loaded error: {ex}");
+            _viewModel.Banner.Show("Başlatma Hatası", ex.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
+        }
     }
 
     private async void ShellWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (_allowClose)
             return;
-
-        // Çeviri aktif değilse kapatmayı iptal edip yeniden Close() çağırmaya gerek yok;
-        // Closing olayı içinden senkron Close() çağırmak WPF'de InvalidOperationException fırlatır.
-        if (!_viewModel.IsTranslating)
-        {
-            _allowClose = true;
-            return;
-        }
 
         e.Cancel = true;
         if (_isClosingInProgress)
@@ -52,10 +52,21 @@ public partial class ShellWindow : FluentWindow
         {
             if (await _viewModel.HandleClosingAsync())
             {
+                if (Application.Current is App app)
+                {
+                    await app.ShutdownHostAsync();
+                }
+
                 _allowClose = true;
                 // Closing yığını tamamlandıktan hemen sonra pencereyi güvenli kapat
                 _ = Dispatcher.BeginInvoke(new Action(Close));
             }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"ShellWindow_Closing error: {ex}");
+            _allowClose = true;
+            _ = Dispatcher.BeginInvoke(new Action(Close));
         }
         finally
         {
@@ -78,10 +89,18 @@ public partial class ShellWindow : FluentWindow
 
     private async void ShellWindow_PreviewDrop(object sender, DragEventArgs e)
     {
-        if (TryExtractDropPath(e.Data, out var path))
+        try
         {
-            e.Handled = true;
-            await _viewModel.OpenBookAsync(path, navigateToWorkspace: true);
+            if (TryExtractDropPath(e.Data, out var path))
+            {
+                e.Handled = true;
+                await _viewModel.OpenBookAsync(path, navigateToWorkspace: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Trace.TraceError($"ShellWindow_PreviewDrop error: {ex}");
+            _viewModel.Banner.Show("Dosya Açılamadı", ex.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
         }
     }
 

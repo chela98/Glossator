@@ -1,9 +1,12 @@
 using System;
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Glossator.AI.Configuration;
 using Glossator.AI.Models;
 using Glossator.AI.Workflows;
 using Microsoft.Extensions.AI;
@@ -185,5 +188,75 @@ public class CyclicTranslationWorkflowTests
         // Assert
         Assert.Equal(string.Empty, result);
         Assert.Equal(1, throwingClient.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenFatalUnauthorized401Occurs_PropagatesInsteadOfMaskingAsEmpty()
+    {
+        var authErrorClient = new QueuedChatClient(new Queue<Func<IReadOnlyList<ChatMessage>, string>>(
+            [_ => throw new ClientResultException("Unauthorized API key", new MockStatusResponse(401))]));
+
+        var workflow = new CyclicTranslationWorkflow(
+            authErrorClient, authErrorClient, authErrorClient,
+            "S", "T", "R");
+
+        await Assert.ThrowsAsync<ClientResultException>(() =>
+            workflow.ExecuteAsync(
+                "[BLOK_001]\nTest\n[/BLOK_001]",
+                [],
+                styleGuide: "Hazır"));
+        Assert.Equal(1, authErrorClient.CallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenCancelledInsideExecutor_PropagatesOperationCanceledException()
+    {
+        using var cts = new CancellationTokenSource();
+        var cancellingClient = new QueuedChatClient(new Queue<Func<IReadOnlyList<ChatMessage>, string>>(
+            [
+                _ =>
+                {
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                }
+            ]));
+
+        var workflow = new CyclicTranslationWorkflow(
+            cancellingClient, cancellingClient, cancellingClient,
+            "S", "T", "R");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            workflow.ExecuteAsync(
+                "[BLOK_001]\nTest\n[/BLOK_001]",
+                [],
+                styleGuide: "Hazır",
+                cancellationToken: cts.Token));
+    }
+
+    [Fact]
+    public void GlossatorAiOptions_DefaultsToSensitiveTelemetryDisabled()
+    {
+        var options = new GlossatorAiOptions();
+        Assert.False(options.EnableSensitiveTelemetry);
+    }
+
+    private sealed class MockStatusResponse(int status) : PipelineResponse
+    {
+        private sealed class EmptyHeaders : PipelineResponseHeaders
+        {
+            public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() => Enumerable.Empty<KeyValuePair<string, string>>().GetEnumerator();
+            public override bool TryGetValue(string name, out string? value) { value = null; return false; }
+            public override bool TryGetValues(string name, out IEnumerable<string>? values) { values = null; return false; }
+        }
+
+        private readonly EmptyHeaders _headers = new();
+        public override int Status => status;
+        public override string ReasonPhrase => string.Empty;
+        protected override PipelineResponseHeaders HeadersCore => _headers;
+        public override BinaryData Content => BinaryData.Empty;
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => BinaryData.Empty;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) => ValueTask.FromResult(BinaryData.Empty);
+        public override void Dispose() { }
     }
 }

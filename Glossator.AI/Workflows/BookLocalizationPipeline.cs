@@ -35,7 +35,8 @@ public class BookLocalizationPipeline
         string stylePrompt,
         string translatorPrompt,
         string reviewerPrompt,
-        ILogger<BookLocalizationPipeline>? logger = null)
+        ILogger<BookLocalizationPipeline>? logger = null,
+        bool enableSensitiveTelemetry = false)
     {
         _styleAnalystClient = styleAnalystClient;
         _translatorClient = translatorClient;
@@ -53,7 +54,8 @@ public class BookLocalizationPipeline
             stylePrompt,
             translatorPrompt,
             reviewerPrompt,
-            EmitProgress);
+            EmitProgress,
+            enableSensitiveTelemetry);
     }
 
     private void EmitProgress(PipelineStepLog log)
@@ -274,6 +276,10 @@ public class BookLocalizationPipeline
                         _logger.LogWarning("Section '{Title}': After micro-recovery, {StillMissing} blocks remain missing.", section.Title, missing.Count);
                     }
                 }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

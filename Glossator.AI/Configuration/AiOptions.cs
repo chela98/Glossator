@@ -17,6 +17,7 @@ public class AgentRoleOptions
 public class GlossatorAiOptions
 {
     public string ActiveProvider { get; set; } = "Evren";
+    public bool EnableSensitiveTelemetry { get; set; }
     public Dictionary<string, AiProviderOptions> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, AgentRoleOptions> Agents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 

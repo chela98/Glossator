@@ -1,3 +1,4 @@
+using System.ClientModel;
 using Glossator.AI.Executors;
 using Glossator.AI.Models;
 using Microsoft.Agents.AI.Workflows;
@@ -21,6 +22,7 @@ public sealed class CyclicTranslationWorkflow
     private readonly string _translatorPrompt;
     private readonly string _reviewerPrompt;
     private readonly Action<PipelineStepLog>? _stepLogger;
+    private readonly bool _enableSensitiveTelemetry;
 
     public CyclicTranslationWorkflow(
         IChatClient styleAnalystClient,
@@ -29,7 +31,8 @@ public sealed class CyclicTranslationWorkflow
         string stylePrompt,
         string translatorPrompt,
         string reviewerPrompt,
-        Action<PipelineStepLog>? stepLogger = null)
+        Action<PipelineStepLog>? stepLogger = null,
+        bool enableSensitiveTelemetry = false)
     {
         _styleAnalystClient = styleAnalystClient;
         _translatorClient = translatorClient;
@@ -38,6 +41,7 @@ public sealed class CyclicTranslationWorkflow
         _translatorPrompt = translatorPrompt;
         _reviewerPrompt = reviewerPrompt;
         _stepLogger = stepLogger;
+        _enableSensitiveTelemetry = enableSensitiveTelemetry;
     }
 
     private Workflow CreateWorkflow()
@@ -61,7 +65,7 @@ public sealed class CyclicTranslationWorkflow
 
         // 3. Onaylandığında veya deneme tükendiğinde çıktı Reviewer'dan alınır
         builder.WithOutputFrom(reviewer);
-        builder.WithOpenTelemetry(cfg => cfg.EnableSensitiveData = true);
+        builder.WithOpenTelemetry(cfg => cfg.EnableSensitiveData = _enableSensitiveTelemetry);
 
         return builder.Build();
     }
@@ -88,7 +92,44 @@ public sealed class CyclicTranslationWorkflow
         try
         {
             var workflow = CreateWorkflow();
-            Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken);
+            await using Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var workflowException = run.OutgoingEvents
+                .OfType<WorkflowErrorEvent>()
+                .Select(e => e.Exception)
+                .FirstOrDefault(e => e != null)
+                ?? run.OutgoingEvents
+                    .OfType<ExecutorFailedEvent>()
+                    .Select(e => e.Data)
+                    .OfType<Exception>()
+                    .FirstOrDefault();
+
+            if (workflowException != null)
+            {
+                var unwrapped = UnwrapExecutorException(workflowException);
+
+                if (unwrapped is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unwrapped);
+                }
+
+                if (IsFatalConfigurationOrAuthException(unwrapped))
+                {
+                    _stepLogger?.Invoke(new PipelineStepLog(
+                        Stage: "CyclicWorkflow",
+                        Summary: $"Sağlayıcı Kimlik/Yapılandırma Hatası: {unwrapped.Message}",
+                        Content: unwrapped.ToString()));
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unwrapped);
+                }
+
+                _stepLogger?.Invoke(new PipelineStepLog(
+                    Stage: "CyclicWorkflow",
+                    Summary: $"İş Akışı Hatası: {unwrapped.Message}",
+                    Content: unwrapped.ToString()));
+            }
 
             var finalState = run.OutgoingEvents
                 .OfType<WorkflowOutputEvent>()
@@ -101,9 +142,17 @@ public sealed class CyclicTranslationWorkflow
                 return finalState.CurrentTranslation.Trim();
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw; // İptal sinyali derhal yukarı iletilir, yutulmaz
+        }
+        catch (Exception ex) when (IsFatalConfigurationOrAuthException(ex))
+        {
+            _stepLogger?.Invoke(new PipelineStepLog(
+                Stage: "CyclicWorkflow",
+                Summary: $"Sağlayıcı Kimlik/Yapılandırma Hatası: {ex.Message}",
+                Content: ex.ToString()));
+            throw; // 401/403/400 gibi ölümcül yetki/konfig hatalarını yedek fallback'te tekrar tekrar yakma
         }
         catch (Exception ex)
         {
@@ -114,5 +163,34 @@ public sealed class CyclicTranslationWorkflow
         }
 
         return string.Empty;
+    }
+
+    private static Exception UnwrapExecutorException(Exception ex)
+    {
+        var current = ex;
+        while (current is System.Reflection.TargetInvocationException tie && tie.InnerException != null)
+        {
+            current = tie.InnerException;
+        }
+        return current;
+    }
+
+    private static bool IsFatalConfigurationOrAuthException(Exception ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is ClientResultException cre && cre.Status is 400 or 401 or 403 or 404 or 422)
+            {
+                return true;
+            }
+
+            if (current is HttpRequestException hre && hre.StatusCode.HasValue
+                && (int)hre.StatusCode.Value is 400 or 401 or 403 or 404 or 422)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

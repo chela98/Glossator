@@ -313,6 +313,10 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             var repairedText = repairStream.Text.Trim();
             return ParseReviewerResponse(repairedText);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _stepLogger?.Invoke(new PipelineStepLog(
@@ -363,7 +367,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             };
             return JsonSerializer.Deserialize<ReviewerPatchResult>(cleaned, options);
         }
-        catch
+        catch (JsonException)
         {
             // 3. Fallback: Regex-based Lenient Parser (JsonSerializer patlasa dahi patch'leri kurtar)
             return TryRegexParseReviewerResponse(cleaned);
@@ -422,7 +426,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 Patches = patches
             };
         }
-        catch
+        catch (Exception ex) when (ex is RegexMatchTimeoutException or FormatException or ArgumentException)
         {
             return null;
         }

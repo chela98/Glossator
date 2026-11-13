@@ -180,14 +180,14 @@ public static class StreamingChatHelper
         }
         finally
         {
-            heartbeatCts.Cancel();
+            await heartbeatCts.CancelAsync().ConfigureAwait(false);
             try
             {
-                await heartbeatTask;
+                await heartbeatTask.ConfigureAwait(false);
             }
-            catch
+            catch (OperationCanceledException)
             {
-                // Task iptal exception'larını yut
+                // Normal heartbeat durdurma
             }
         }
 
@@ -198,7 +198,7 @@ public static class StreamingChatHelper
         {
             composedResponse = updates.ToChatResponse();
         }
-        catch
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or ArgumentException)
         {
             // Birleştirme hatası durumunda boş bırakılır
         }

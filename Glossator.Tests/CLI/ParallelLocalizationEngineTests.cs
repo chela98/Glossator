@@ -407,13 +407,13 @@ public class ParallelLocalizationEngineTests : IDisposable
         await RunWithTestConsoleAsync(() =>
             engine.RunAsync(package, [chapterItem], concurrency: 1, isFresh: false, requestedSectionCount: null, isTestMode: true));
 
-        // Assert
+        // Assert: Kısmi/test modunda nihai _tr.xhtml yazılmaz, yalnızca .part dosyası üretilir
         Assert.Equal(2, transClient.CallCount);
         var baseOut = Path.Combine(opfDir, "ch01_tr.xhtml");
-        Assert.True(File.Exists(baseOut));
+        Assert.False(File.Exists(baseOut));
         Assert.True(File.Exists(baseOut + ".part"));
         Assert.False(File.Exists(baseOut + ".done"));
-        var outContent = File.ReadAllText(baseOut);
+        var outContent = File.ReadAllText(baseOut + ".part");
         Assert.Contains("İlk gövde bloğu çevrildi.", outContent);
         Assert.Contains("İkinci gövde bloğu çevrildi.", outContent);
         Assert.Contains("Third body block should remain untranslated in test mode.", outContent);
@@ -669,5 +669,56 @@ public class ParallelLocalizationEngineTests : IDisposable
 
         var prefCheckpoints = await store.GetCompletedCheckpointsAsync("Agentic GraphRAG", "preface01.html");
         Assert.Equal(5, prefCheckpoints.Keys.Count(k => k >= 0));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenCancelledMidChapter_FlushesCompletedSectionsViaFinally()
+    {
+        // Arrange: 2 kesitli bölüm; 1. kesit tamamlanır, 2. kesitte iptal tetiklenir
+        var opfDir = Path.Combine(_tempDir, "cancel_flush_book");
+        Directory.CreateDirectory(opfDir);
+        File.WriteAllText(Path.Combine(opfDir, "ch01.xhtml"), """
+            <html><body>
+              <h1>Part 1</h1>
+              <p>First section text completes before cancel.</p>
+              <h1>Part 2</h1>
+              <p>Second section triggers cancellation.</p>
+            </body></html>
+            """);
+
+        using var cts = new CancellationTokenSource();
+        var styleClient = new ConcurrentRoleChatClient(_ => "Teknik üslup.");
+        var transCall = 0;
+        var transClient = new ConcurrentRoleChatClient(_ =>
+        {
+            if (Interlocked.Increment(ref transCall) == 1)
+            {
+                return "[BLOK_000]\nKısım 1\n[/BLOK_000]\n[BLOK_001]\nİlk kesit iptalden önce tamamlandı.\n[/BLOK_001]";
+            }
+
+            cts.Cancel();
+            throw new OperationCanceledException(cts.Token);
+        });
+        var revClient = new ConcurrentRoleChatClient(_ => """{"isApproved": true, "patches": []}""");
+
+        var (sp, _, store) = await BuildServiceProviderAsync(styleClient, transClient, revClient);
+        await using var _sp = sp;
+
+        var engine = new ParallelLocalizationEngine(sp);
+        var chapterItem = new EpubItem { Id = "ch1", Href = "ch01.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var package = new EpubPackage { Title = "CancelFlushBook", OpfDirectory = opfDir, Spine = [chapterItem] };
+
+        // Act
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            RunWithTestConsoleAsync(() =>
+                engine.RunAsync(package, [chapterItem], concurrency: 1, isFresh: false, requestedSectionCount: null, isTestMode: false, cts.Token)));
+
+        // Assert: 1. kesit checkpoint'leri finally bloğu sayesinde SQLite'a flush edilmiş olmalı, .done üretilmemeli
+        var checkpoints = await store.GetCompletedCheckpointsAsync("CancelFlushBook", "ch01.xhtml");
+        Assert.True(checkpoints.ContainsKey(-1));
+        Assert.True(checkpoints.ContainsKey(0));
+        Assert.True(checkpoints.ContainsKey(1));
+        Assert.False(File.Exists(Path.Combine(opfDir, "ch01_tr.xhtml.done")));
+        Assert.False(File.Exists(Path.Combine(opfDir, "ch01_tr.xhtml")));
     }
 }

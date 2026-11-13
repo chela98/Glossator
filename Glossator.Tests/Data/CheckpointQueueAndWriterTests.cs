@@ -319,4 +319,56 @@ public class CheckpointStoreTests : IDisposable
         await Assert.ThrowsAsync<ObjectDisposedException>(async () => await store.EnqueueAsync(cp));
         await Assert.ThrowsAsync<ObjectDisposedException>(async () => await store.FlushAsync());
     }
+
+    [Fact]
+    public async Task CheckpointStore_WhenFactoryFailsOnceThenRecovers_SubsequentFlushSucceedsWithoutPoisonedBatch()
+    {
+        // Arrange
+        var flakyFactory = new FlakyConnectionFactory(_connectionFactory, failNextOpen: true);
+        await using var store = new CheckpointStore(flakyFactory, capacity: 50);
+
+        await store.EnqueueAsync(new SegmentCheckpoint
+        {
+            BookId = "book_recover",
+            ChapterFile = "ch01.html",
+            SegmentIndex = 1,
+            OriginalHash = "h1",
+            TagName = "p",
+            OriginalText = "Bad Batch",
+            TranslatedText = "Kötü"
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.FlushAsync());
+
+        // Act: Hata giderildikten sonra yeni bir öğe kuyruğa al ve flush et (önceki zehirli batch kalıntısı olmamalı)
+        flakyFactory.FailNextOpen = false;
+        await store.EnqueueAsync(new SegmentCheckpoint
+        {
+            BookId = "book_recover",
+            ChapterFile = "ch01.html",
+            SegmentIndex = 2,
+            OriginalHash = "h2",
+            TagName = "p",
+            OriginalText = "Good Batch",
+            TranslatedText = "İyi"
+        });
+
+        await store.FlushAsync();
+
+        // Assert
+        var completed = await store.GetCompletedCheckpointsAsync("book_recover", "ch01.html");
+        Assert.False(completed.ContainsKey(1));
+        Assert.True(completed.ContainsKey(2));
+        Assert.Equal("İyi", completed[2].TranslatedText);
+    }
+
+    private sealed class FlakyConnectionFactory(ISqliteConnectionFactory inner, bool failNextOpen) : ISqliteConnectionFactory
+    {
+        public bool FailNextOpen { get; set; } = failNextOpen;
+        public string ConnectionString => inner.ConnectionString;
+        public SqliteConnection CreateOpenConnection() => FailNextOpen ? throw new InvalidOperationException("Transient failure") : inner.CreateOpenConnection();
+        public Task<SqliteConnection> CreateOpenConnectionAsync(CancellationToken cancellationToken = default)
+            => FailNextOpen ? throw new InvalidOperationException("Transient failure") : inner.CreateOpenConnectionAsync(cancellationToken);
+        public Task InitializeDatabaseAsync(CancellationToken cancellationToken = default) => inner.InitializeDatabaseAsync(cancellationToken);
+    }
 }

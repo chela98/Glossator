@@ -59,19 +59,23 @@ public sealed class RelayCommand : ICommand
 
 public sealed class AsyncRelayCommand : ICommand
 {
+    public static Action<Exception>? UnhandledExceptionHandler { get; set; }
+
     private readonly Func<object?, Task> _executeAsync;
     private readonly Func<object?, bool>? _canExecute;
+    private readonly Action<Exception>? _onException;
     private bool _isExecuting;
 
-    public AsyncRelayCommand(Func<Task> executeAsync, Func<bool>? canExecute = null)
-        : this(_ => executeAsync(), canExecute is null ? null : _ => canExecute())
+    public AsyncRelayCommand(Func<Task> executeAsync, Func<bool>? canExecute = null, Action<Exception>? onException = null)
+        : this(_ => executeAsync(), canExecute is null ? null : _ => canExecute(), onException)
     {
     }
 
-    public AsyncRelayCommand(Func<object?, Task> executeAsync, Func<object?, bool>? canExecute = null)
+    public AsyncRelayCommand(Func<object?, Task> executeAsync, Func<object?, bool>? canExecute = null, Action<Exception>? onException = null)
     {
         _executeAsync = executeAsync ?? throw new ArgumentNullException(nameof(executeAsync));
         _canExecute = canExecute;
+        _onException = onException;
     }
 
     public event EventHandler? CanExecuteChanged;
@@ -87,6 +91,22 @@ public sealed class AsyncRelayCommand : ICommand
         try
         {
             await _executeAsync(parameter);
+        }
+        catch (OperationCanceledException)
+        {
+            // İptal sessizce karşılanır
+        }
+        catch (Exception ex)
+        {
+            var handler = _onException ?? UnhandledExceptionHandler;
+            if (handler != null)
+            {
+                handler(ex);
+            }
+            else
+            {
+                System.Diagnostics.Trace.TraceError($"AsyncRelayCommand unhandled exception: {ex}");
+            }
         }
         finally
         {

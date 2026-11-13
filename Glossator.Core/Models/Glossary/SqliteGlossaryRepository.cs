@@ -47,20 +47,26 @@ public class SqliteGlossaryRepository
             WHERE Terms.IsReviewed = 0;
             """;
 
+        await using var command = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
+        var pEnglishTerm = command.Parameters.Add("@EnglishTerm", SqliteType.Text);
+        var pEnglishDefinition = command.Parameters.Add("@EnglishDefinition", SqliteType.Text);
+        var pPolicy = command.Parameters.Add("@Policy", SqliteType.Integer);
+        var pSourceBook = command.Parameters.Add("@SourceBook", SqliteType.Text);
+        command.Parameters.Add("@Now", SqliteType.Text).Value = now;
+        await command.PrepareAsync(ct).ConfigureAwait(false);
+
         foreach (var term in terms)
         {
-            await using var command = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
-            command.Parameters.AddWithValue("@EnglishTerm", term.EnglishTerm);
-            command.Parameters.AddWithValue("@EnglishDefinition", (object?)term.EnglishDefinition ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Policy", (int)term.Policy);
-            command.Parameters.AddWithValue("@SourceBook", (object?)sourceBook ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Now", now);
+            pEnglishTerm.Value = term.EnglishTerm;
+            pEnglishDefinition.Value = (object?)term.EnglishDefinition ?? DBNull.Value;
+            pPolicy.Value = (int)term.Policy;
+            pSourceBook.Value = (object?)sourceBook ?? DBNull.Value;
 
-            var rowsAffected = await command.ExecuteNonQueryAsync(ct);
+            var rowsAffected = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (rowsAffected > 0) insertedCount++;
         }
 
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return insertedCount;
     }
 
@@ -164,17 +170,22 @@ public class SqliteGlossaryRepository
             """;
 
         var seedTerms = LoadDefaultCoreTerms();
+        await using var cmd = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
+        var pEn = cmd.Parameters.Add("@EnglishTerm", SqliteType.Text);
+        var pTr = cmd.Parameters.Add("@TurkishTerm", SqliteType.Text);
+        var pPolicy = cmd.Parameters.Add("@Policy", SqliteType.Integer);
+        cmd.Parameters.Add("@Now", SqliteType.Text).Value = now;
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+
         foreach (var (en, tr, policy) in seedTerms)
         {
-            await using var cmd = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
-            cmd.Parameters.AddWithValue("@EnglishTerm", en);
-            cmd.Parameters.AddWithValue("@TurkishTerm", tr);
-            cmd.Parameters.AddWithValue("@Policy", (int)policy);
-            cmd.Parameters.AddWithValue("@Now", now);
-            await cmd.ExecuteNonQueryAsync(ct);
+            pEn.Value = en;
+            pTr.Value = tr;
+            pPolicy.Value = (int)policy;
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -352,24 +363,32 @@ public class SqliteGlossaryRepository
             """;
 
         var count = 0;
+        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        var pEn = cmd.Parameters.Add("@EnglishTerm", SqliteType.Text);
+        var pTr = cmd.Parameters.Add("@TurkishTerm", SqliteType.Text);
+        var pDef = cmd.Parameters.Add("@EnglishDefinition", SqliteType.Text);
+        var pPolicy = cmd.Parameters.Add("@Policy", SqliteType.Integer);
+        var pReviewed = cmd.Parameters.Add("@IsReviewed", SqliteType.Integer);
+        var pSourceBook = cmd.Parameters.Add("@SourceBook", SqliteType.Text);
+        cmd.Parameters.Add("@Now", SqliteType.Text).Value = now;
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+
         foreach (var entry in entries)
         {
             if (string.IsNullOrWhiteSpace(entry.EnglishTerm)) continue;
 
-            await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
-            cmd.Parameters.AddWithValue("@EnglishTerm", entry.EnglishTerm.Trim());
-            cmd.Parameters.AddWithValue("@TurkishTerm", (object?)entry.TurkishTerm ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@EnglishDefinition", (object?)entry.EnglishDefinition ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Policy", (int)entry.Policy);
-            cmd.Parameters.AddWithValue("@IsReviewed", entry.IsReviewed ? 1 : 0);
-            cmd.Parameters.AddWithValue("@SourceBook", (object?)entry.SourceBook ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Now", now);
+            pEn.Value = entry.EnglishTerm.Trim();
+            pTr.Value = (object?)entry.TurkishTerm ?? DBNull.Value;
+            pDef.Value = (object?)entry.EnglishDefinition ?? DBNull.Value;
+            pPolicy.Value = (int)entry.Policy;
+            pReviewed.Value = entry.IsReviewed ? 1 : 0;
+            pSourceBook.Value = (object?)entry.SourceBook ?? DBNull.Value;
 
-            await cmd.ExecuteNonQueryAsync(ct);
+            await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             count++;
         }
 
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return count;
     }
 
@@ -502,17 +521,20 @@ public class SqliteGlossaryRepository
         var sql = $"UPDATE Terms SET {string.Join(", ", setClauses)} WHERE Id = @Id;";
 
         var affected = 0;
+        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        var pId = cmd.Parameters.Add("@Id", SqliteType.Integer);
+        cmd.Parameters.Add("@Now", SqliteType.Text).Value = now;
+        if (isReviewed.HasValue) cmd.Parameters.Add("@IsReviewed", SqliteType.Integer).Value = isReviewed.Value ? 1 : 0;
+        if (policy.HasValue) cmd.Parameters.Add("@Policy", SqliteType.Integer).Value = (int)policy.Value;
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+
         foreach (var id in idList)
         {
-            await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
-            cmd.Parameters.AddWithValue("@Id", id);
-            cmd.Parameters.AddWithValue("@Now", now);
-            if (isReviewed.HasValue) cmd.Parameters.AddWithValue("@IsReviewed", isReviewed.Value ? 1 : 0);
-            if (policy.HasValue) cmd.Parameters.AddWithValue("@Policy", (int)policy.Value);
-            affected += await cmd.ExecuteNonQueryAsync(ct);
+            pId.Value = id;
+            affected += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return affected;
     }
 
@@ -529,14 +551,17 @@ public class SqliteGlossaryRepository
 
         const string sql = "DELETE FROM Terms WHERE Id = @Id;";
         var deleted = 0;
+        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        var pId = cmd.Parameters.Add("@Id", SqliteType.Integer);
+        await cmd.PrepareAsync(ct).ConfigureAwait(false);
+
         foreach (var id in idList)
         {
-            await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
-            cmd.Parameters.AddWithValue("@Id", id);
-            deleted += await cmd.ExecuteNonQueryAsync(ct);
+            pId.Value = id;
+            deleted += await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
 
-        await transaction.CommitAsync(ct);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
         return deleted;
     }
 }
