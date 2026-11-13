@@ -1,9 +1,15 @@
+<div align="center">
+
+<img src="docs/assets/glossator_icon.png" alt="Glossator Logo" width="96" height="96" />
+
 # Glossator — .NET 10 Multi-Agent EPUB Teknik Yerelleştirme Platformu
 
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![Microsoft Agent Framework](https://img.shields.io/badge/Microsoft%20Agent%20Framework-1.24.0-0078D4?style=flat-square)](https://learn.microsoft.com/en-us/agent-framework/)
-[![Tests](https://img.shields.io/badge/Tests-458%2F458%20Passing-2EA44F?style=flat-square)](#kalite-ve-test-paketi)
+[![Tests](https://img.shields.io/badge/Tests-484%2F484%20Passing-2EA44F?style=flat-square)](#kalite-ve-test-paketi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+
+</div>
 
 **Glossator**, İngilizce teknik kitapları ve mühendislik belgelerini (`.epub`) HTML/XHTML tasarımını, kod bloklarını ve teknik terminolojiyi bozmadan Türkçe'ye kazandıran **çok ajanlı (.NET 10 + Microsoft Agent Framework)** yerelleştirme stüdyosu (**Glossator Studio**) ve komut satırı motorudur (**Glossator CLI**).
 
@@ -13,17 +19,19 @@ Geleneksel çeviri araçlarının veya ham LLM istemlerinin aksine Glossator, **
 
 ## Görsel Çıktı Kanıtları
 
-Gerçek bir O'Reilly teknik kitabı (*Deep Search* / *AI Engineering* vb.) üzerinde Glossator çıktılarının EPUB okuyucu görünümü:
+Gerçek bir teknik kitap üzerinde **Orijinal EPUB (İngilizce)** ile **Glossator Çıktısı (Türkçe)** sayfalarının yan yana okuyucu görünümü:
 
-| Karmaşık Tablo ve Kod/Matematik Koruması | Aşamalı Terminoloji ve Teknik Çeviri |
+| Orijinal EPUB (İngilizce) | Glossator Çıktısı (Türkçe) |
 | :---: | :---: |
-| ![Deep Search Çeviri Örneği](docs/assets/sample_translation_deepsearch_code.png) | ![Benchmarking Çeviri Örneği](docs/assets/sample_translation_benchmarking.jpg) |
+| ![Orijinal İngilizce EPUB Sayfası](docs/assets/sample_memory_ops_en.jpg) | ![Glossator Türkçe Çeviri Çıktısı](docs/assets/sample_memory_ops_tr.jpg) |
 
-> Dikkat edilirse `<pre>`, `<code>`, `<math>` ve `<svg>` düğümleri AST düzeyinde korunmuş; başlıklar `İngilizce (Türkçe)` hiyerarşisinde sunulmuş; teknik jargon bozulmadan akıcı Türkçe sağlanmıştır.
+> Dikkat edilirse şekil ve diyagramlar (`Figure 4-3`), renkli çapraz referans linkleri (`Şekil 4-2`, `Örnek 4-5`), Python kod bloğu (`<pre>`) ve satır içi `<code>` düğümleri AST düzeyinde birebir korunmuş; başlıklar `İngilizce (Türkçe)` hiyerarşisinde sunulmuş ve ham Markdown sızıntısı olmadan akıcı teknik Türkçe üretilmiştir.
+>
+> **Hibrit Ajan & Maliyet Konfigürasyonu:** Yukarıdaki örnek çıktı, pahalı frontier/Pro modeller olmadan düşük maliyetli karma model yönlendirmesiyle alınmıştır: **`StyleAnalyst`** → `gemini-3.8-flash` (`ReasoningEffort: low`), **`Translator`** → `deepseek-flash` (`ReasoningEffort: none`), **`Reviewer`** → `gemini-3.8-flash` (`ReasoningEffort: low`).
 
 ---
 
-## Çözüm Mimarisi (5 Proje)
+## Çözüm Mimarisi (6 Proje)
 
 ```mermaid
 flowchart TD
@@ -64,7 +72,8 @@ flowchart TD
 | **`Glossator.AI`** | `net10.0` | `Microsoft.Agents.AI.Workflows` (`1.24.0`) döngüsel iş akışı, `ResilienceChatClient`, `RateLimitingChatClient`, `ProviderDiscoveryService`, Disk-First `PromptLoader`, OpenTelemetry `GlossatorDiagnostics` |
 | **`Glossator.App`** | `net10.0-windows` | **Glossator Studio** — `WPF-UI 4.3.0` Fluent Koyu/Aydınlık masaüstü uygulaması, 6 sayfa, sürükle-bırak kitap açma, canlı günlük çekmecesi, anlık telemetri |
 | **`Glossator.Cli`** | `net10.0` | Platform bağımsız (Windows/Linux/macOS) headless çeviri ve `Spectre.Console.Cli` sözlük yönetim aracı |
-| **`Glossator.Tests`** | `net10.0-windows` | **42 test dosyasında 458 birim/entegrasyon testi** (`xUnit 2.9.3`) |
+| **`Glossator.Tests`** | `net10.0` | **41 test dosyasında 472 çapraz-platform birim/entegrasyon testi** (`Core`, `AI`, `CLI` — Windows & Linux uyumlu, `xUnit 2.9.3`) |
+| **`Glossator.App.Tests`** | `net10.0-windows` | **3 test dosyasında 12 Studio/WPF ViewModel ve yaşam döngüsü testi** (`xUnit 2.9.3`) |
 
 ---
 
@@ -93,7 +102,7 @@ Gömülü [seed_glossary.yaml](Glossator.Core/Resources/seed_glossary.yaml) dosy
 
 ### 4. Kısmi Güvenlik, Kurtarma ve Token Doğruluğu
 * **`HtmlSegment.IsTranslationComplete` & `.part` İzolasyonu:** Bölümde tek bir çevrilmemiş blok kalsa dahi dosya `.done` sayılmaz, `.part` olarak izole edilir; `BookLocalizationPipeline` `DirectTranslatorFallback` ve `MicroRecovery` ile eksik blokları kurtarır.
-* **`ResilienceChatClient`:** `429`, `503`, `504`, `408`, `TimeoutException`, `SocketException` için jitter'lı üstel geri çekilme uygular; Gemini gibi sağlayıcıların kümülatif SSE `UsageContent` akışlarını delta/tekil nihai sayımla normalize eder ve gizli reasoning tokenlarını fatura metriğine doğru biçimde işler.
+* **`ResilienceChatClient`:** `408`, `429`, `502`, `503`, `504`, ağ zaman aşımı (`TimeoutException`), `SocketException` ve `IOException` durumlarında `Retry-After` başlığına saygılı (`60s` tavanlı) jitter'lı üstel geri çekilme uygular (çağıran iptalinde anında durur); Gemini gibi sağlayıcıların kümülatif SSE `UsageContent` akışlarını delta/tekil nihai sayımla normalize eder ve gizli reasoning tokenlarını fatura metriğine doğru biçimde işler.
 * **Güvenli Kapanış:** Pencere kapatıldığında bekleyen `CheckpointStore` kuyruğu (`BoundedChannel(5000)`) ve OTLP dışa aktarıcıları kontrollü biçimde diske yazılır/boşaltılır.
 
 ---
@@ -150,9 +159,9 @@ Ardından tarayıcıdan `http://localhost:18888` adresini açarak her kesit içi
 
 ## Kalite ve Test Paketi
 
-- **CI Pipeline ([.github/workflows/ci.yml](.github/workflows/ci.yml)):** `windows-latest` üzerinde tam çözüm `.NET 10` Release `restore`/`build`/`test` koşar; `ubuntu-latest` üzerinde ise `Glossator.Cli` (`net10.0`) çapraz platform derlemesi doğrulanır.
-- **Release Otomasyonu ([.github/workflows/release.yml](.github/workflows/release.yml)):** `v*` tag'i ile tetiklendiğinde Windows Studio (`Glossator-Studio-win-x64.zip` + `GLOSSATOR_SMOKE_TEST=1` doğrulaması), Windows/Linux self-contained CLI paketleri (`win-x64`, `linux-x64`) ve `SHA256SUMS.txt` otomatik yayınlanır.
-- **Test Kapsamı:** `Glossator.Tests` içinde `42` test dosyasında **`458 / 458`** birim ve entegrasyon testi sıfır hata / sıfır uyarı ile geçer (`ReasoningEffortMappingTests`, `ProviderDiscoveryServiceTests`, `SettingsViewModelTests`, `BookLocalizationPipelineTests`, `CyclicTranslationWorkflowTests`, `ResilienceChatClientTests`, `SafeZipExtractorTests`, `StrictXhtmlMarkupFormatterTests` vb.).
+- **CI Pipeline ([.github/workflows/ci.yml](.github/workflows/ci.yml)):** `windows-latest` üzerinde tam çözüm `.NET 10` Release `restore`/`build`/`test` (`484 / 484`) koşar; `ubuntu-latest` üzerinde ise `Glossator.Tests` (`net10.0`) üzerinden **`472` çapraz-platform birim/entegrasyon testi** ve `Core`/`AI`/`CLI` derlemesi doğrulanır.
+- **Release Otomasyonu ([.github/workflows/release.yml](.github/workflows/release.yml)):** `v*` tag'i ile tetiklendiğinde sıkıştırılmış tek-dosya self-contained Windows Studio (`Glossator-Studio-win-x64.zip` + `GLOSSATOR_SMOKE_TEST=1` doğrulaması), Windows/Linux tek-dosya CLI paketleri (`win-x64`, `linux-x64`) ve `SHA256SUMS.txt` otomatik yayınlanır.
+- **Test Kapsamı:** `Glossator.Tests` (`41` dosya, `472` test) ve `Glossator.App.Tests` (`3` test dosyası, `12` test) olmak üzere `44` test dosyasında toplam **`484 / 484`** birim ve entegrasyon testi sıfır hata / sıfır uyarı ile geçer (`ReasoningEffortMappingTests`, `ProviderDiscoveryServiceTests`, `SettingsViewModelTests`, `BookLocalizationPipelineTests`, `CyclicTranslationWorkflowTests`, `ResilienceChatClientTests`, `SafeZipExtractorTests`, `StrictXhtmlMarkupFormatterTests` vb.).
 - **Duman Testi:** `GLOSSATOR_SMOKE_TEST=1` ortam değişkeni ile `Glossator.App.exe` Release başlangıç-kapanış sağlık kontrolü çıkış kodu `0` ile doğrulanmıştır.
 
 ---
@@ -161,13 +170,10 @@ Ardından tarayıcıdan `http://localhost:18888` adresini açarak her kesit içi
 
 | Belge | İçerik |
 | :--- | :--- |
-| **[Sistem Mimarisi ve Veri Akışı](docs/ARCHITECTURE.md)** | 5 projenin bağımlılık grafiği, AST maskeleme, MAF döngüsel iş akışı, `ResilienceChatClient` ve OpenTelemetry detayları |
+| **[Sistem Mimarisi ve Veri Akışı](docs/ARCHITECTURE.md)** | 6 projenin bağımlılık grafiği, AST maskeleme, MAF döngüsel iş akışı, `ResilienceChatClient` ve OpenTelemetry detayları |
 | **[Studio ve CLI Kullanım Kılavuzu](docs/STUDIO_AND_CLI_GUIDE.md)** | Studio 6 sayfası, `.part`/`.done` yönetimi, CLI bayrakları, Aspire Dashboard ve Calibre PDF↔EPUB dönüşümü |
 | **[Yapılandırma, Sağlayıcılar ve Reasoning](docs/CONFIGURATION_AND_PROVIDERS.md)** | Öncelik zinciri, EVREN/Gemini/OpenAI/Ollama ayarları, Ping & `/models` keşfi, `none..xhigh` akıl yürütme ve `PromptLoader` |
-| **[EVREN AI Showcase Özeti](docs/EVREN_SHOWCASE.md)** | Hibrit sağlayıcı stratejisi ve projenin yönetici özeti |
-| **[Teknik Mülakat Hazırlık Kartı](docs/INTERVIEW_CHEATSHEET.md)** | Sistem tasarımı soru-cevapları ve kök neden mühendislik çözümleri |
-| **[GitHub Hazırlık Notları](docs/GITHUB_READINESS_NOTES.md)** | Tamamlanan kalite/yayın kapıları ve dağıtım güvenlik notları |
-| **[Uygulama Planı](plan.md)** & **[Yol Haritası](roadmap.md)** | Faz 0–8 mimari evrimi ve `v2.2+` gelecek hedefleri |
+| **[Geliştirme Yol Haritası](roadmap.md)** | Tamamlanan sürümler (`v1.0` → `v1.3.0-beta.1`) ve `v1.3.0+` hedefleri |
 
 ---
 

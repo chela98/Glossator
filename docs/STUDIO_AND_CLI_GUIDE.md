@@ -54,7 +54,7 @@ Studio penceresi ([ShellWindow.xaml](../Glossator.App/Views/ShellWindow.xaml)) s
 * **Canlı USD / TRY Kur Yönetimi:** `ExchangeRateService` üzerinden Frankfurter (ECB) & ExchangeRate-API'den kur yenileme veya manuel sabit kur kaydı.
 
 #### 6) Hakkımda (`AboutView`)
-* Geliştirici bilgileri, teknik mimari rozetleri ve 3 aşamalı boru hattı özeti.
+* Geliştirici bilgileri, teknik mimari rozetleri ve 4 aşamalı boru hattı özeti.
 
 ---
 

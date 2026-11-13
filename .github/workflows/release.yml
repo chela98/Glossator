@@ -209,7 +209,13 @@ jobs:
             echo '```'
           } > release-notes.md
 
+          extra_flags=()
+          if [[ "${{ github.ref_name }}" == *-* ]]; then
+            extra_flags+=(--prerelease)
+          fi
+
           gh release create "${{ github.ref_name }}" \
             release-assets/* \
             --title "Glossator ${{ github.ref_name }}" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            "${extra_flags[@]}"

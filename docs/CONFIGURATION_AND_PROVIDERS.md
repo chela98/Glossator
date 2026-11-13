@@ -13,9 +13,9 @@ Yapılandırma dosyaları aşağıdan yukarıya birbirini ezer (en alttaki kazan
 | 1 | `appsettings.example.json` (`AppContext.BaseDirectory`) | Sıfır-yapılandırma temel şablon (`Evren` varsayılan + `Gemini`, `OpenAI`, `Ollama`, `Custom`) |
 | 2 | `appsettings.json` (`AppContext.BaseDirectory`) | Uygulama yanındaki yerel ayarlar (`.gitignore` kapsamındadır) |
 | 3 | `appsettings.Development.json` | Geliştirme ortamı ek ayarları |
-| 4 | *User Secrets* (yalnızca `Glossator.Cli` Dev) | `glossator-cli-secrets-9a8b7c6d` |
+| 4 | *User Secrets* (`Glossator.App` & `Glossator.Cli`) | `glossator-cli-secrets-9a8b7c6d` |
 | 5 | **`~/.glossator/user_settings.json`** | Studio'dan kaydedilen aktif ayarlar (`GLOSSATOR_HOME` ile değişir) |
-| 6 | **Ortam Değişkenleri** | Örn. `GLOSSATOR_HOME`, `GLOSSATOR_DB`, `GlossatorAi__ActiveProvider` |
+| 6 | **Ortam Değişkenleri** | Örn. `GLOSSATOR_HOME`, `GLOSSATOR_DB`, `GlossatorAi__ActiveProvider`, `OpenTelemetry__CaptureMessageContent` |
 
 > [!TIP]
 > Hem **Glossator Studio** hem **Glossator CLI** ilk açılışta doğrudan [appsettings.example.json](../Glossator.Cli/appsettings.example.json) temel şablonunu yedek olarak yükler (`Evren` varsayılan aktif profil, yanında `Gemini`, `OpenAI`, `Ollama`, `Custom` hazır). EVREN veya başka bir sağlayıcı için **Ayarlar** sekmesinden API anahtarınızı girip **Ayarları Kaydet** diyerek `~/.glossator/user_settings.json` dosyasına kaydedebilirsiniz; ayrıca `SettingsViewModel` yapılandırma hiç bulunmasa bile `Evren`, `Gemini`, `OpenAI` ve `Ollama` ön ayarlarını otomatik sunar.
@@ -23,6 +23,7 @@ Yapılandırma dosyaları aşağıdan yukarıya birbirini ezer (en alttaki kazan
 ### Taşınabilir Ortam Değişkenleri (`GlossatorPaths`)
 * `GLOSSATOR_HOME`: Varsayılan `~/.glossator` çalışma dizinini başka bir klasöre taşır (`user_settings.json` ve varsayılan `glossator.db` buradadır).
 * `GLOSSATOR_DB`: Merkezi SQLite veritabanı (`glossator.db`) dosya yolunu doğrudan ezer.
+* `OpenTelemetry:CaptureMessageContent` / `GlossatorAi:EnableSensitiveTelemetry`: Varsayılan olarak `false` değerindedir; OpenTelemetry trace/log kayıtlarına ham kitap/prompt içeriklerinin yazılmasını gizlilik gereği kapalı tutar (yalnızca geliştirici hata ayıklamasında açılmalıdır).
 
 ---
 

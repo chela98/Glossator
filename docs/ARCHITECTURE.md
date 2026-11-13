@@ -1,12 +1,12 @@
 # Glossator — Sistem Mimarisi ve Veri Akışı
 
-Bu belge, **Glossator** çözümünün tüm katmanlarını (`Glossator.Core`, `Glossator.AI`, `Glossator.App`, `Glossator.Cli`, `Glossator.Tests`), ajan iş akışlarını, dayanıklılık ara yazılımlarını, güvenlik sınırlarını ve kalıcılık mekanizmalarını kod düzeyinde detaylandırır.
+Bu belge, **Glossator** çözümünün tüm katmanlarını (`Glossator.Core`, `Glossator.AI`, `Glossator.App`, `Glossator.Cli`, `Glossator.Tests`, `Glossator.App.Tests`), ajan iş akışlarını, dayanıklılık ara yazılımlarını, güvenlik sınırlarını ve kalıcılık mekanizmalarını kod düzeyinde detaylandırır.
 
 ---
 
 ## 1. Çözüm Yapısı ve Bağımlılık Grafiği
 
-Çözüm dosyası ([Glossator.slnx](../Glossator.slnx)) beş projeden oluşur:
+Çözüm dosyası ([Glossator.slnx](../Glossator.slnx)) altı projeden oluşur (sürüm yönetimi [Directory.Packages.props](../Directory.Packages.props) üzerinden Central Package Management ve [Directory.Build.props](../Directory.Build.props) + [.editorconfig](../.editorconfig) ile merkezileştirilmiştir):
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,8 @@ flowchart LR
     AI["Glossator.AI (.NET 10)"]
     App["Glossator.App (.NET 10-windows / WPF)"]
     Cli["Glossator.Cli (.NET 10 / Console)"]
-    Tests["Glossator.Tests (.NET 10-windows / xUnit)"]
+    Tests["Glossator.Tests (.NET 10 / xUnit · 472 Test)"]
+    AppTests["Glossator.App.Tests (.NET 10-windows / xUnit · 12 Test)"]
 
     AI --> Core
     App --> Core
@@ -24,7 +25,9 @@ flowchart LR
     Tests --> Core
     Tests --> AI
     Tests --> Cli
-    Tests --> App
+    AppTests --> Core
+    AppTests --> AI
+    AppTests --> App
 ```
 
 ### Kullanılan Başlıca Paketler
@@ -32,12 +35,13 @@ flowchart LR
 | Katman | Proje | Öne Çıkan Bağımlılıklar |
 | :--- | :--- | :--- |
 | Çekirdek & EPUB Motoru | `Glossator.Core` | `AngleSharp 1.8.3`, `AngleSharp.Xml 1.2.0`, `Microsoft.Data.Sqlite 10.0.12`, `YamlDotNet 18.1.0` |
-| Çoklu Ajan & LLM İstemcisi | `Glossator.AI` | `Microsoft.Agents.AI 1.24.0`, `Microsoft.Agents.AI.Workflows 1.24.0`, `Microsoft.Extensions.AI 10.10.0`, `Microsoft.Extensions.AI.OpenAI 10.10.1`, `System.Threading.RateLimiting 10.0.12` |
+| Çoklu Ajan & LLM İstemcisi | `Glossator.AI` | `Microsoft.Agents.AI 1.24.0`, `Microsoft.Agents.AI.Workflows 1.24.0`, `Microsoft.Extensions.AI 10.10.0`, `Microsoft.Extensions.AI.OpenAI 10.10.1`, `Microsoft.Extensions.Http 10.0.12`, `System.Threading.RateLimiting 10.0.12` |
 | Masaüstü Stüdyo | `Glossator.App` | `WPF-UI 4.3.0`, `Microsoft.Extensions.Hosting 10.0.12`, `OpenTelemetry.Exporter.OpenTelemetryProtocol 1.19.1`, `OpenTelemetry.Extensions.Hosting 1.19.1`, `OpenTelemetry.Instrumentation.Http 1.19.0` |
 | Terminal & Otomasyon | `Glossator.Cli` | `Spectre.Console 0.57.2`, `Spectre.Console.Cli 0.57.2`, `Microsoft.Extensions.Hosting 10.0.12`, `OpenTelemetry.* 1.19.x` |
-| Test Paketi | `Glossator.Tests` | `xUnit 2.9.3`, `Microsoft.NET.Test.Sdk 17.14.1`, `Spectre.Console.Testing 0.57.2` |
+| Çapraz-Platform Test Paketi | `Glossator.Tests` | `xUnit 2.9.3`, `Microsoft.NET.Test.Sdk 17.14.1`, `Spectre.Console.Testing 0.57.2` *(41 dosya, 472 test)* |
+| Studio / WPF Test Paketi | `Glossator.App.Tests` | `xUnit 2.9.3`, `Microsoft.NET.Test.Sdk 17.14.1`, `coverlet.collector 6.0.4` *(3 test dosyası, 12 test)* |
 
-> **Platform Notu:** `Glossator.Core`, `Glossator.AI` ve `Glossator.Cli` platform bağımsız `net10.0` hedefler; `Glossator.App` (ve onu referans alan `Glossator.slnx` / `Glossator.Tests`) WPF nedeniyle `net10.0-windows` hedefler.
+> **Platform Notu:** `Glossator.Core`, `Glossator.AI`, `Glossator.Cli` ve `Glossator.Tests` (`472` test) platform bağımsız `net10.0` hedefler (Ubuntu Linux dahil tüm işletim sistemlerinde derlenir ve koşar); yalnızca `Glossator.App` ve `Glossator.App.Tests` (`12` test) WPF nedeniyle `net10.0-windows` hedefler.
 
 ---
 
@@ -116,12 +120,12 @@ flowchart TD
 ## 4. Çoklu Ajan ve LLM Ara Yazılım Mimarisi (`Glossator.AI`)
 
 ### 4.1 IChatClient Ara Yazılım (Middleware) Zinciri
-[AiServiceExtensions.cs](../Glossator.AI/Extensions/AiServiceExtensions.cs) üç ajanı (`StyleAnalyst`, `Translator`, `Reviewer`) `AddKeyedTransient<IChatClient>` ile kaydeder. `ChatClientBuilder` dıştan içe doğru şu sırayla sarar:
+[AiServiceExtensions.cs](../Glossator.AI/Extensions/AiServiceExtensions.cs) üç ajanı (`StyleAnalyst`, `Translator`, `Reviewer`) `AddKeyedTransient<IChatClient>` ile kaydeder ve seçenekleri `IOptionsMonitor<GlossatorAiOptions>` üzerinden canlı okur. `ChatClientBuilder` dıştan içe doğru şu sırayla sarar:
 
-1. **`UseOpenTelemetry` (En Dış Katman):** Nihai normalize edilmiş kullanım metriklerini (`UsageContent`) ve mesaj içeriklerini (yapılandırmaya bağlı sensitive data) yakalar.
+1. **`UseOpenTelemetry` (En Dış Katman):** Nihai normalize edilmiş kullanım metriklerini (`UsageContent`) yakalar; ham prompt/çeviri metinleri (`EnableSensitiveData`) varsayılan olarak gizlidir ve yalnızca `OpenTelemetry:CaptureMessageContent` / `GlossatorAi:EnableSensitiveTelemetry` açık olduğunda kaydedilir.
 2. **`UseLogging`:** `ILoggerFactory` üzerinden yapılandırılmış loglama.
 3. **`ResilienceChatClient`** ([ResilienceChatClient.cs](../Glossator.AI/Clients/ResilienceChatClient.cs)):
-   * `429`, `503`, `504`, `408`, `TimeoutException`, `SocketException` ve proxy hata metinleri için varsayılan **3 denemeli jitter'lı üstel geri çekilme** (initial delay 2s); `OperationCanceledException` geldiğinde durur.
+   * `408`, `429`, `502`, `503`, `504` HTTP kodları, `TimeoutException` (ağ zaman aşımı), `SocketException`, `IOException` ve özel LLM proxy hata metinleri için varsayılan **3 toplam denemeli (`maxRetries = 3`: 1 ilk deneme + 2 yeniden deneme, initial delay 2s, `60s` tavanlı) jitter'lı üstel geri çekilme** uygular ve sunucunun `Retry-After` / `retry-after-ms` başlıklarına saygı duyar; çağıran `cancellationToken` iptal sinyali geldiğinde anında durur.
    * **Kümülatif SSE Token Koruması:** Gemini gibi sağlayıcıların her SSE parçasında kümülatif `UsageContent` göndermesi nedeniyle OpenTelemetry toplayıcılarının token sayısını katlayarak şişirmesini (`10K -> 100K`) önler; ara parçalardaki `UsageContent` öğelerini sıyırıp akış sonunda yalnızca tekil nihai `UsageContent` yayınlar.
    * **Gizli Reasoning Token Hesabı (`NormalizeUsageContent`):** `total > input + output` olduğunda aradaki gizli düşünme (thinking) token farkını `OutputTokenDetails.ReasoningTokenCount` içine kaydeder ve `OutputTokenCount` değerini gerçek faturalandırılan çıktıya eşitler.
 4. **`RateLimitingChatClient`:** Paylaşılan singleton `TokenBucketRateLimiter` (dakikada 60 jeton, kuyruk limiti 100) ile tüm worker'ların toplam istek hızını sınırlar.

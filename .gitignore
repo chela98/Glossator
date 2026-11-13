@@ -370,3 +370,10 @@ FodyWeavers.xsd
 !**/appsettings.example.json
 /GLOSSATOR_AUDIT_AND_ACTION_PLAN.md
 /ROADMAP_ISSUES_ROOT_CAUSE.md
+
+# Local-only drafts, interview prep, showcase & internal notes
+/plan.md
+/docs/EVREN_SHOWCASE.md
+/docs/GITHUB_READINESS_NOTES.md
+/docs/INTERVIEW_CHEATSHEET.md
+/docs/LINKEDIN_LAUNCH.md
