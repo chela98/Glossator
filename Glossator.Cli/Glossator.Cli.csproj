@@ -6,12 +6,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
-    <PackageReference Include="Spectre.Console" Version="0.57.2" />
-    <PackageReference Include="Spectre.Console.Cli" Version="0.57.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+    <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="Spectre.Console.Cli" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,8 +30,6 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>glossator</AssemblyName>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <SatelliteResourceLanguages>en;tr</SatelliteResourceLanguages>
     <UserSecretsId>glossator-cli-secrets-9a8b7c6d</UserSecretsId>
   </PropertyGroup>

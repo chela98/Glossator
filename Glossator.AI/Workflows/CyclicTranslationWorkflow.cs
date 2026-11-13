@@ -92,8 +92,9 @@ public sealed class CyclicTranslationWorkflow
         try
         {
             var workflow = CreateWorkflow();
-            await using Run run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken)
+            var run = await InProcessExecution.RunAsync(workflow, initialState, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
+            await using var _runScope = run.ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
 

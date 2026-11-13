@@ -10,16 +10,16 @@ using Microsoft.Extensions.Options;
 namespace Glossator.App.Infrastructure;
 
 public sealed class UserSettingsService(
-    IOptions<GlossatorAiOptions> aiOptions,
+    IOptionsMonitor<GlossatorAiOptions> aiOptionsMonitor,
     IConfiguration configuration,
-    IExchangeRateService? exchangeRateService = null)
+    IExchangeRateService? exchangeRateService = null) : IDisposable
 {
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
     private readonly SemaphoreSlim _ioLock = new(1, 1);
     private ExchangeRateQuote? _lastQuote;
     private bool _manualOverrideActive;
 
-    public GlossatorAiOptions CurrentOptions => aiOptions.Value;
+    public GlossatorAiOptions CurrentOptions => aiOptionsMonitor.CurrentValue;
 
     public ExchangeRateQuote? LastExchangeRateQuote => _lastQuote;
 
@@ -128,7 +128,7 @@ public sealed class UserSettingsService(
         await _ioLock.WaitAsync(ct);
         try
         {
-            var live = aiOptions.Value;
+            var live = aiOptionsMonitor.CurrentValue;
             live.ActiveProvider = activeProvider;
 
             var removedKeys = live.Providers.Keys.Where(k => !providers.ContainsKey(k)).ToList();
@@ -278,12 +278,8 @@ public sealed class UserSettingsService(
     private static async Task WriteRootAsync(JsonObject rootObj, CancellationToken ct)
     {
         var settingsPath = GlossatorPaths.GetUserSettingsPath();
-        var dir = Path.GetDirectoryName(settingsPath);
-        if (!string.IsNullOrWhiteSpace(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        await File.WriteAllTextAsync(settingsPath, rootObj.ToJsonString(WriteOptions), ct);
+        await AtomicFileWriter.WriteAllTextAsync(settingsPath, rootObj.ToJsonString(WriteOptions), ct);
     }
+
+    public void Dispose() => _ioLock.Dispose();
 }

@@ -71,12 +71,12 @@ public sealed class GlossarySerializationService : IGlossarySerializationService
         if (format == SerializationFormat.Yaml)
         {
             var yamlContent = YamlSerializer.Serialize(model);
-            await File.WriteAllTextAsync(filePath, yamlContent, cancellationToken);
+            await File.WriteAllTextAsync(filePath, yamlContent, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             var jsonContent = JsonSerializer.Serialize(model, JsonOptions);
-            await File.WriteAllTextAsync(filePath, jsonContent, cancellationToken);
+            await File.WriteAllTextAsync(filePath, jsonContent, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -104,7 +104,7 @@ public sealed class GlossarySerializationService : IGlossarySerializationService
             throw new FileNotFoundException($"Sözlük dosyası bulunamadı: '{filePath}'", filePath);
         }
 
-        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        var content = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         GlossaryFileModel? model;
 
         var isJson = filePath.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||

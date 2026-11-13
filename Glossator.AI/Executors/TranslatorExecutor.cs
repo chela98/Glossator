@@ -77,7 +77,7 @@ public sealed class TranslatorExecutor : Executor<TranslationReviewState, Transl
             attempt: state.AttemptCount,
             activity: activity,
             stepLogger: _stepLogger,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var translatedText = streamResult.Text.Trim();
 

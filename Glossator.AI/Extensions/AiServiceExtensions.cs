@@ -3,9 +3,11 @@ using Glossator.AI.Configuration;
 using Glossator.AI.RateLimiting;
 using Glossator.AI.Services;
 using Glossator.AI.Workflows;
+using Glossator.Core.Services;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenAI;
 
@@ -40,7 +42,13 @@ public static class AiServiceExtensions
         RegisterAgentChatClient(services, KeyReviewer);
 
         // 4. Sağlayıcı Ping ve Model Keşif Servisi
-        services.TryAddSingleton<IProviderDiscoveryService, ProviderDiscoveryService>();
+        services.AddHttpClient<IProviderDiscoveryService, ProviderDiscoveryService>(client =>
+        {
+            client.Timeout = ProviderDiscoveryService.DefaultRequestTimeout;
+        }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15)
+        });
 
         return services;
     }
@@ -73,7 +81,7 @@ public static class AiServiceExtensions
     {
         services.AddKeyedTransient<IChatClient>(agentRoleKey, (sp, key) =>
         {
-            var options = sp.GetRequiredService<IOptions<GlossatorAiOptions>>().Value;
+            var options = ResolveLiveOptions(sp);
             var (providerKey, providerConfig, modelId) = options.ResolveAgent(agentRoleKey);
 
             if (providerConfig == null || string.IsNullOrWhiteSpace(providerConfig.Endpoint))
@@ -171,7 +179,8 @@ public static class AiServiceExtensions
         var reviewer = services.GetRequiredKeyedService<IChatClient>(KeyReviewer);
         var postProcessor = services.GetRequiredService<Glossator.Core.Rules.TermGlossingPostProcessor>();
         var logger = services.GetService<Microsoft.Extensions.Logging.ILogger<BookLocalizationPipeline>>();
-        var aiOptions = services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
+        var aiOptions = services.GetService<IOptionsMonitor<GlossatorAiOptions>>()?.CurrentValue
+            ?? services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
         var config = services.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
         var enableSensitiveTelemetry = ResolveSensitiveTelemetryEnabled(aiOptions, config);
 
@@ -189,6 +198,44 @@ public static class AiServiceExtensions
             reviewerPrompt,
             logger,
             enableSensitiveTelemetry);
+    }
+
+    private static GlossatorAiOptions ResolveLiveOptions(IServiceProvider sp)
+    {
+        var monitor = sp.GetService<IOptionsMonitor<GlossatorAiOptions>>();
+        if (monitor is not null)
+        {
+            var hasCustomOptionsMonitor = monitor.GetType().Assembly != typeof(IOptionsMonitor<>).Assembly;
+            var hasOptionConfig = sp.GetService<IConfigureOptions<GlossatorAiOptions>>() is not null
+                || sp.GetService<IPostConfigureOptions<GlossatorAiOptions>>() is not null;
+
+            if (hasCustomOptionsMonitor || hasOptionConfig)
+            {
+                return monitor.CurrentValue;
+            }
+        }
+
+        return sp.GetService<IOptions<GlossatorAiOptions>>()?.Value
+            ?? monitor?.CurrentValue
+            ?? new GlossatorAiOptions();
+    }
+
+    public static IServiceCollection AddGlossatorExchangeRateService(this IServiceCollection services)
+    {
+        services.AddHttpClient(nameof(ExchangeRateService), client =>
+        {
+            client.Timeout = Timeout.InfiniteTimeSpan;
+        }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15)
+        });
+
+        services.TryAddSingleton<IExchangeRateService>(sp =>
+            new ExchangeRateService(
+                sp.GetService<ILogger<ExchangeRateService>>(),
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(ExchangeRateService))));
+
+        return services;
     }
 
     private static bool ResolveSensitiveTelemetryEnabled(

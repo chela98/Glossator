@@ -35,14 +35,17 @@ public partial class App : Application
         try
         {
             var builder = Host.CreateApplicationBuilder(e.Args);
-
+            var envName = builder.Environment.EnvironmentName;
+            builder.Configuration.Sources.Clear();
             builder.Configuration
                 .SetBasePath(AppContext.BaseDirectory)
                 .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
                 .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
+                .AddJsonFile($"appsettings.{envName}.json", optional: true, reloadOnChange: true)
                 .AddJsonFile(GlossatorPaths.GetUserSettingsPath(), optional: true, reloadOnChange: true)
-                .AddEnvironmentVariables();
+                .AddUserSecrets<App>(optional: true)
+                .AddEnvironmentVariables()
+                .AddCommandLine(e.Args);
 
             var config = builder.Configuration;
             var themeService = new Glossator.App.Services.StudioThemeService();
@@ -111,7 +114,7 @@ public partial class App : Application
             // AI Yapılandırması
             builder.Services.Configure<GlossatorAiOptions>(config.GetSection("GlossatorAi"));
             builder.Services.AddGlossatorAiClients();
-            builder.Services.AddSingleton<IExchangeRateService, ExchangeRateService>();
+            builder.Services.AddGlossatorExchangeRateService();
             builder.Services.AddSingleton<Glossator.App.Infrastructure.UserSettingsService>();
             builder.Services.AddSingleton<Glossator.App.Infrastructure.StudioTelemetryMonitor>();
 

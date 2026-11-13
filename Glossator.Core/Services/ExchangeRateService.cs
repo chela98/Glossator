@@ -76,7 +76,13 @@ public sealed class ExchangeRateService : IExchangeRateService, IDisposable
         }
         else
         {
-            _httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            _httpClient = new HttpClient(new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(15)
+            })
+            {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
             _ownsHttpClient = true;
         }
     }
@@ -176,9 +182,10 @@ public sealed class ExchangeRateService : IExchangeRateService, IDisposable
                 return null;
             }
 
-            await using var stream = await response.Content
+            var stream = await response.Content
                 .ReadAsStreamAsync(attemptCts.Token)
                 .ConfigureAwait(false);
+            await using var _streamScope = stream.ConfigureAwait(false);
 
             using var doc = await JsonDocument
                 .ParseAsync(stream, cancellationToken: attemptCts.Token)

@@ -2,7 +2,10 @@ namespace Glossator.Tests.AI;
 
 using Glossator.AI.Configuration;
 using Glossator.AI.Extensions;
+using Glossator.AI.Services;
+using Glossator.Core.Services;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -354,5 +357,96 @@ public class DynamicProviderResolutionTests
         Assert.Equal(expectedInputRate, pricing.InputRatePerMillionUsd);
         Assert.Equal(expectedOutputRate, pricing.OutputRatePerMillionUsd);
         Assert.Equal(expectedIsFree, pricing.IsFree);
+    }
+
+    [Fact]
+    public void DynamicConfigurationReload_UpdatesKeyedClientViaOptionsMonitor()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"glossator-cfg-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var configPath = Path.Combine(tempDir, "dynamic_settings.json");
+
+        try
+        {
+            File.WriteAllText(configPath, """
+            {
+              "GlossatorAi": {
+                "ActiveProvider": "OpenAI",
+                "Providers": {
+                  "OpenAI": {
+                    "Endpoint": "https://api.openai.com/v1",
+                    "ApiKey": "sk-initial-001",
+                    "DefaultModel": "gpt-4o"
+                  }
+                },
+                "Agents": {
+                  "StyleAnalyst": { "Provider": "OpenAI", "ModelId": "gpt-4o" }
+                }
+              }
+            }
+            """);
+
+            var config = new ConfigurationBuilder()
+                .AddJsonFile(configPath, optional: false, reloadOnChange: false)
+                .Build();
+
+            var services = new ServiceCollection();
+            services.AddSingleton<IConfiguration>(config);
+            services.Configure<GlossatorAiOptions>(config.GetSection("GlossatorAi"));
+            services.AddGlossatorAiClients();
+
+            using var sp = services.BuildServiceProvider();
+            var client1 = sp.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyStyleAnalyst);
+            Assert.Equal("gpt-4o", client1.GetService<ChatClientMetadata>()?.DefaultModelId);
+
+            File.WriteAllText(configPath, """
+            {
+              "GlossatorAi": {
+                "ActiveProvider": "OpenAI",
+                "Providers": {
+                  "OpenAI": {
+                    "Endpoint": "https://proxy.example.com/v1",
+                    "ApiKey": "sk-reloaded-002",
+                    "DefaultModel": "gpt-4.1"
+                  }
+                },
+                "Agents": {
+                  "StyleAnalyst": { "Provider": "OpenAI", "ModelId": "gpt-4.1" }
+                }
+              }
+            }
+            """);
+
+            config.Reload();
+
+            var client2 = sp.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyStyleAnalyst);
+            var meta2 = client2.GetService<ChatClientMetadata>();
+            Assert.Equal("gpt-4.1", meta2?.DefaultModelId);
+            Assert.Equal(new Uri("https://proxy.example.com/v1"), meta2?.ProviderUri);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void AddGlossatorServices_RegistersHttpClientFactoryAndSingletonExchangeRateService()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(Options.Create(new GlossatorAiOptions()));
+        services.AddGlossatorAiClients();
+        services.AddGlossatorExchangeRateService();
+
+        using var sp = services.BuildServiceProvider();
+        var factory = sp.GetService<IHttpClientFactory>();
+        var discovery = sp.GetService<IProviderDiscoveryService>();
+        var rate1 = sp.GetService<IExchangeRateService>();
+        var rate2 = sp.GetService<IExchangeRateService>();
+
+        Assert.NotNull(factory);
+        Assert.NotNull(discovery);
+        Assert.NotNull(rate1);
+        Assert.Same(rate1, rate2);
     }
 }

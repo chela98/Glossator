@@ -32,8 +32,10 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<int> ImportTermsAsync(IEnumerable<GlossaryEntry> terms, string sourceBook, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
+        var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var _transactionScope = transaction.ConfigureAwait(false);
 
         var now = DateTime.UtcNow.ToString("o");
         var insertedCount = 0;
@@ -47,7 +49,7 @@ public class SqliteGlossaryRepository
             WHERE Terms.IsReviewed = 0;
             """;
 
-        await using var command = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
+        using var command = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
         var pEnglishTerm = command.Parameters.Add("@EnglishTerm", SqliteType.Text);
         var pEnglishDefinition = command.Parameters.Add("@EnglishDefinition", SqliteType.Text);
         var pPolicy = command.Parameters.Add("@Policy", SqliteType.Integer);
@@ -135,7 +137,8 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<int> CleanupObsoleteTermsAsync(CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
         const string cleanupSql = """
             DELETE FROM Terms WHERE EnglishTerm = 'LLMs';
             DELETE FROM Terms WHERE EnglishTerm = 'RNNs';
@@ -143,8 +146,8 @@ public class SqliteGlossaryRepository
             DELETE FROM Terms WHERE EnglishTerm LIKE '%(%)%';
             DELETE FROM Terms WHERE EnglishTerm LIKE '%‐%' OR EnglishTerm LIKE '%‑%';
             """;
-        await using var cmd = new SqliteCommand(cleanupSql, connection);
-        return await cmd.ExecuteNonQueryAsync(ct);
+        using var cmd = new SqliteCommand(cleanupSql, connection);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -153,10 +156,12 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task SeedDefaultTurkishTranslationsAsync(CancellationToken ct = default)
     {
-        await CleanupObsoleteTermsAsync(ct);
+        await CleanupObsoleteTermsAsync(ct).ConfigureAwait(false);
 
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
+        var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var _transactionScope = transaction.ConfigureAwait(false);
 
         var now = DateTime.UtcNow.ToString("o");
 
@@ -170,7 +175,7 @@ public class SqliteGlossaryRepository
             """;
 
         var seedTerms = LoadDefaultCoreTerms();
-        await using var cmd = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
+        using var cmd = new SqliteCommand(insertSql, connection, (SqliteTransaction)transaction);
         var pEn = cmd.Parameters.Add("@EnglishTerm", SqliteType.Text);
         var pTr = cmd.Parameters.Add("@TurkishTerm", SqliteType.Text);
         var pPolicy = cmd.Parameters.Add("@Policy", SqliteType.Integer);
@@ -246,14 +251,15 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<List<GlossaryEntry>> GetAllTermsAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var query = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms ORDER BY EnglishTerm;";
-        await using var command = new SqliteCommand(query, connection);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var command = new SqliteCommand(query, connection);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
         var list = new List<GlossaryEntry>();
-        while (await reader.ReadAsync(cancellationToken))
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             list.Add(new GlossaryEntry
             {
@@ -274,7 +280,8 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<int> AddOrUpdateTermAsync(GlossaryEntry entry, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var now = DateTime.UtcNow.ToString("o");
         var sql = """
@@ -290,7 +297,7 @@ public class SqliteGlossaryRepository
                 UpdatedAt = excluded.UpdatedAt;
             """;
 
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@EnglishTerm", entry.EnglishTerm.Trim());
         cmd.Parameters.AddWithValue("@TurkishTerm", (object?)entry.TurkishTerm ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@EnglishDefinition", (object?)entry.EnglishDefinition ?? DBNull.Value);
@@ -299,7 +306,7 @@ public class SqliteGlossaryRepository
         cmd.Parameters.AddWithValue("@SourceBook", (object?)entry.SourceBook ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@Now", now);
 
-        return await cmd.ExecuteNonQueryAsync(ct);
+        return await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -310,10 +317,11 @@ public class SqliteGlossaryRepository
     {
         if (entry.Id <= 0)
         {
-            return await AddOrUpdateTermAsync(entry, ct);
+            return await AddOrUpdateTermAsync(entry, ct).ConfigureAwait(false);
         }
 
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var now = DateTime.UtcNow.ToString("o");
         var sql = """
@@ -327,7 +335,7 @@ public class SqliteGlossaryRepository
             WHERE Id = @Id;
             """;
 
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@Id", entry.Id);
         cmd.Parameters.AddWithValue("@TurkishTerm", string.IsNullOrWhiteSpace(entry.TurkishTerm) ? DBNull.Value : entry.TurkishTerm.Trim());
         cmd.Parameters.AddWithValue("@EnglishDefinition", string.IsNullOrWhiteSpace(entry.EnglishDefinition) ? DBNull.Value : entry.EnglishDefinition.Trim());
@@ -336,8 +344,8 @@ public class SqliteGlossaryRepository
         cmd.Parameters.AddWithValue("@SourceBook", string.IsNullOrWhiteSpace(entry.SourceBook) ? DBNull.Value : entry.SourceBook.Trim());
         cmd.Parameters.AddWithValue("@Now", now);
 
-        var affected = await cmd.ExecuteNonQueryAsync(ct);
-        return affected > 0 ? affected : await AddOrUpdateTermAsync(entry, ct);
+        var affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        return affected > 0 ? affected : await AddOrUpdateTermAsync(entry, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -345,8 +353,10 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<int> AddOrUpdateTermsBatchAsync(IEnumerable<GlossaryEntry> entries, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
+        var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var _transactionScope = transaction.ConfigureAwait(false);
 
         var now = DateTime.UtcNow.ToString("o");
         var sql = """
@@ -363,7 +373,7 @@ public class SqliteGlossaryRepository
             """;
 
         var count = 0;
-        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
         var pEn = cmd.Parameters.Add("@EnglishTerm", SqliteType.Text);
         var pTr = cmd.Parameters.Add("@TurkishTerm", SqliteType.Text);
         var pDef = cmd.Parameters.Add("@EnglishDefinition", SqliteType.Text);
@@ -397,7 +407,8 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<List<GlossaryEntry>> SearchTermsAsync(string query, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var sql = """
             SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook
@@ -406,12 +417,12 @@ public class SqliteGlossaryRepository
             ORDER BY EnglishTerm;
             """;
 
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@q", $"%{query.Trim()}%");
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var list = new List<GlossaryEntry>();
-        while (await reader.ReadAsync(ct))
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             list.Add(new GlossaryEntry
             {
@@ -432,14 +443,15 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<GlossaryEntry?> GetTermByIdAsync(int id, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var sql = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms WHERE Id = @Id;";
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@Id", id);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
+        using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             return new GlossaryEntry
             {
@@ -460,14 +472,15 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<GlossaryEntry?> GetTermByEnglishAsync(string englishTerm, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var sql = "SELECT Id, EnglishTerm, TurkishTerm, EnglishDefinition, Policy, IsReviewed, SourceBook FROM Terms WHERE EnglishTerm = @EnglishTerm COLLATE NOCASE;";
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@EnglishTerm", englishTerm.Trim());
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (await reader.ReadAsync(ct))
+        using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             return new GlossaryEntry
             {
@@ -488,13 +501,14 @@ public class SqliteGlossaryRepository
     /// </summary>
     public async Task<bool> DeleteTermAsync(int id, CancellationToken ct = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         var sql = "DELETE FROM Terms WHERE Id = @Id;";
-        await using var cmd = new SqliteCommand(sql, connection);
+        using var cmd = new SqliteCommand(sql, connection);
         cmd.Parameters.AddWithValue("@Id", id);
 
-        var affected = await cmd.ExecuteNonQueryAsync(ct);
+        var affected = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return affected > 0;
     }
 
@@ -510,8 +524,10 @@ public class SqliteGlossaryRepository
         var idList = ids.Where(id => id > 0).Distinct().ToList();
         if (idList.Count == 0 || (!isReviewed.HasValue && !policy.HasValue)) return 0;
 
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
+        var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var _transactionScope = transaction.ConfigureAwait(false);
 
         var setClauses = new List<string> { "UpdatedAt = @Now" };
         if (isReviewed.HasValue) setClauses.Add("IsReviewed = @IsReviewed");
@@ -521,7 +537,7 @@ public class SqliteGlossaryRepository
         var sql = $"UPDATE Terms SET {string.Join(", ", setClauses)} WHERE Id = @Id;";
 
         var affected = 0;
-        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
         var pId = cmd.Parameters.Add("@Id", SqliteType.Integer);
         cmd.Parameters.Add("@Now", SqliteType.Text).Value = now;
         if (isReviewed.HasValue) cmd.Parameters.Add("@IsReviewed", SqliteType.Integer).Value = isReviewed.Value ? 1 : 0;
@@ -546,12 +562,14 @@ public class SqliteGlossaryRepository
         var idList = ids.Where(id => id > 0).Distinct().ToList();
         if (idList.Count == 0) return 0;
 
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
+        var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var _transactionScope = transaction.ConfigureAwait(false);
 
         const string sql = "DELETE FROM Terms WHERE Id = @Id;";
         var deleted = 0;
-        await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+        using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
         var pId = cmd.Parameters.Add("@Id", SqliteType.Integer);
         await cmd.PrepareAsync(ct).ConfigureAwait(false);
 

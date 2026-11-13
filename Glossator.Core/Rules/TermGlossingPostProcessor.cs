@@ -32,7 +32,7 @@ public class TermGlossingPostProcessor
     {
         if (_terms == null)
         {
-            var terms = await _repository.GetAllTermsAsync();
+            var terms = await _repository.GetAllTermsAsync().ConfigureAwait(false);
             _terms = terms
                 .OrderByDescending(t => t.EnglishTerm.Length)
                 .ToList();
@@ -55,7 +55,7 @@ public class TermGlossingPostProcessor
             return (new List<string>(), new Dictionary<string, string>());
         }
 
-        var terms = await GetCachedTermsAsync();
+        var terms = await GetCachedTermsAsync().ConfigureAwait(false);
         var alwaysEnglish = new List<string>();
         var glossaryMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -110,7 +110,7 @@ public class TermGlossingPostProcessor
     /// </summary>
     public async Task RegisterCachedSectionUsageAsync(string sectionText, bool isHeading = false)
     {
-        await GetTermsForSectionAsync(sectionText, isHeading);
+        await GetTermsForSectionAsync(sectionText, isHeading).ConfigureAwait(false);
     }
 
 }

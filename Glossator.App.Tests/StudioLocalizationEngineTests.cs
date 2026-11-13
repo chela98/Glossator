@@ -11,7 +11,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Glossator.Tests.App;
+namespace Glossator.App.Tests;
 
 [Collection("GlobalDiagnosticsAndConsole")]
 public sealed class StudioLocalizationEngineTests : IDisposable

@@ -9,7 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
-namespace Glossator.Tests.App;
+namespace Glossator.App.Tests;
 
 [Collection("GlobalDiagnosticsAndConsole")]
 public sealed class SettingsViewModelTests : IDisposable
@@ -252,10 +252,28 @@ public sealed class SettingsViewModelTests : IDisposable
         throw new FileNotFoundException($"Could not locate repo file: {Path.Combine(segments)}");
     }
 
+    [Fact]
+    public void UserSettingsService_CurrentOptions_ReflectsOptionsMonitorUpdates()
+    {
+        var initial = CreateSampleOptions();
+        var updated = CreateSampleOptions();
+        updated.ActiveProvider = "OpenAI";
+
+        var monitor = new TestOptionsMonitor<GlossatorAiOptions>(initial);
+        var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var settingsService = new UserSettingsService(monitor, config);
+
+        Assert.Equal("Gemini", settingsService.CurrentOptions.ActiveProvider);
+
+        monitor.Update(updated);
+
+        Assert.Equal("OpenAI", settingsService.CurrentOptions.ActiveProvider);
+    }
+
     private static SettingsViewModel CreateViewModel(GlossatorAiOptions options, IProviderDiscoveryService discoveryService)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
-        var settingsService = new UserSettingsService(Options.Create(options), config);
+        var settingsService = new UserSettingsService(new TestOptionsMonitor<GlossatorAiOptions>(options), config);
         return new SettingsViewModel(settingsService, new StubDialogService(), new BannerService(), discoveryService);
     }
 

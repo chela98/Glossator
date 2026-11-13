@@ -21,19 +21,19 @@ public static class PromptLoader
         var exePromptsPath = Path.Combine(baseDirectory, "Prompts", fileName);
         if (File.Exists(exePromptsPath))
         {
-            return await File.ReadAllTextAsync(exePromptsPath, ct);
+            return await File.ReadAllTextAsync(exePromptsPath, ct).ConfigureAwait(false);
         }
 
         // 2. İkincil Öncelik: Doğrudan baseDirectory / <fileName> (Doğrudan EXE yanı)
         var directExePath = Path.Combine(baseDirectory, fileName);
         if (File.Exists(directExePath))
         {
-            return await File.ReadAllTextAsync(directExePath, ct);
+            return await File.ReadAllTextAsync(directExePath, ct).ConfigureAwait(false);
         }
 
         // 3. Nihai Güvenli Kaynak (Embedded Resource Fallback):
         // Disk üzerinde kullanıcı tarafından özelleştirilmiş dosya yoksa DLL içine derlenmiş varsayılan istemi kullan.
-        var resourceContent = await TryLoadEmbeddedPromptAsync(fileName, ct);
+        var resourceContent = await TryLoadEmbeddedPromptAsync(fileName, ct).ConfigureAwait(false);
         if (resourceContent != null)
         {
             return resourceContent;
@@ -66,11 +66,14 @@ public static class PromptLoader
 
         if (resourceName != null)
         {
-            await using var stream = assembly.GetManifestResourceStream(resourceName);
+            var stream = assembly.GetManifestResourceStream(resourceName);
             if (stream != null)
             {
-                using var reader = new StreamReader(stream);
-                return await reader.ReadToEndAsync(ct);
+                await using (stream.ConfigureAwait(false))
+                {
+                    using var reader = new StreamReader(stream);
+                    return await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+                }
             }
         }
 

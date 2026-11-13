@@ -331,7 +331,8 @@ public sealed class ParallelLocalizationEngine(
             var snapshot = GlossatorDiagnostics.GetStageStatsSnapshot();
             if (snapshot.Count > 0 || GlossatorDiagnostics.SessionSectionsCompleted > 0)
             {
-                var aiOpts = rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<Glossator.AI.Configuration.GlossatorAiOptions>>()?.Value;
+                var aiOpts = rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptionsMonitor<Glossator.AI.Configuration.GlossatorAiOptions>>()?.CurrentValue
+                    ?? rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<Glossator.AI.Configuration.GlossatorAiOptions>>()?.Value;
                 var rateQuote = await ResolveSessionExchangeRateAsync(rootServiceProvider);
                 RenderSessionReport(sessionStopwatch.Elapsed, aiOpts, rateQuote, snapshot);
             }

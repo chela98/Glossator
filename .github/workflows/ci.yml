@@ -28,8 +28,8 @@ jobs:
     - name: Run Unit Tests
       run: dotnet test Glossator.slnx --configuration Release --no-build --verbosity normal
 
-  cli-cross-platform-build:
-    name: Build Cross-Platform CLI (Linux)
+  linux-cross-platform-test:
+    name: Build & Test Cross-Platform (Linux net10.0)
     runs-on: ubuntu-latest
 
     steps:
@@ -41,8 +41,11 @@ jobs:
       with:
         dotnet-version: '10.0.x'
 
-    - name: Restore CLI Dependencies
-      run: dotnet restore Glossator.Cli/Glossator.Cli.csproj
+    - name: Restore Core / AI / CLI / Tests Dependencies
+      run: dotnet restore Glossator.Tests/Glossator.Tests.csproj
 
-    - name: Build CLI (net10.0 Release)
-      run: dotnet build Glossator.Cli/Glossator.Cli.csproj --configuration Release --no-restore
+    - name: Build Cross-Platform Projects (net10.0 Release)
+      run: dotnet build Glossator.Tests/Glossator.Tests.csproj --configuration Release --no-restore
+
+    - name: Run Cross-Platform Unit Tests (net10.0)
+      run: dotnet test Glossator.Tests/Glossator.Tests.csproj --configuration Release --no-build --verbosity normal

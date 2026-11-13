@@ -102,7 +102,7 @@ public class BookLocalizationPipeline
             attempt: 1,
             activity: activity,
             stepLogger: EmitProgress,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         _cachedStyleGuide = streamResult.Text.Trim();
 
         _logger.LogInformation("StyleAnalyst completed. Guide extracted ({GuideLength} chars).", _cachedStyleGuide.Length);
@@ -128,7 +128,7 @@ public class BookLocalizationPipeline
     /// </summary>
     public async Task RegisterCachedSectionAsync(string sectionText, bool isHeading = false)
     {
-        await _postProcessor.RegisterCachedSectionUsageAsync(sectionText, isHeading);
+        await _postProcessor.RegisterCachedSectionUsageAsync(sectionText, isHeading).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -156,7 +156,7 @@ public class BookLocalizationPipeline
 
         using (var preActivity = GlossatorDiagnostics.ActivitySource.StartActivity("PreProcessor"))
         {
-            (doNotTranslateTerms, glossaryTerms) = await _postProcessor.GetTermsForSectionAsync(combinedText);
+            (doNotTranslateTerms, glossaryTerms) = await _postProcessor.GetTermsForSectionAsync(combinedText).ConfigureAwait(false);
             preActivity?.SetTag("terms.glossary_count", glossaryTerms.Count);
             preActivity?.SetTag("terms.protected_count", doNotTranslateTerms.Count);
 
@@ -179,7 +179,7 @@ public class BookLocalizationPipeline
                 doNotTranslateTerms,
                 glossaryTerms,
                 activeStyleGuide,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
 
         // Güvenlik Ağı: Beklenmedik boş çıktıda doğrudan Translator ile kurtar
@@ -199,7 +199,7 @@ public class BookLocalizationPipeline
                 attempt: 1,
                 activity: fallbackActivity,
                 stepLogger: EmitProgress,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(fallbackResult.Text))
             {
                 reviewedText = fallbackResult.Text.Trim();
@@ -245,7 +245,7 @@ public class BookLocalizationPipeline
                     attempt: 1,
                     activity: recoveryActivity,
                     stepLogger: EmitProgress,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (!string.IsNullOrWhiteSpace(deltaResult.Text))
                 {

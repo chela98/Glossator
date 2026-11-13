@@ -1,0 +1,12 @@
+root = true
+
+[*]
+charset = utf-8
+dotnet_diagnostic.CA1001.severity = warning
+
+# Library assemblies must not capture SynchronizationContext (CA2007)
+[Glossator.Core/**/*.cs]
+dotnet_diagnostic.CA2007.severity = warning
+
+[Glossator.AI/**/*.cs]
+dotnet_diagnostic.CA2007.severity = warning

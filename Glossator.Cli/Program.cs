@@ -231,21 +231,21 @@ try
 
     // 4. Modern .NET 10 HostApplicationBuilder ve DI Altyapısı
     var userSettingsPath = GlossatorPaths.GetUserSettingsPath();
-    var hostBuilder = Host.CreateApplicationBuilder(args);
+    var hostBuilder = Host.CreateApplicationBuilder();
+    var envName = hostBuilder.Environment.EnvironmentName;
+    var configArgs = args
+        .Where(a => a.Contains('=', StringComparison.Ordinal) || a.StartsWith('/'))
+        .ToArray();
+    hostBuilder.Configuration.Sources.Clear();
     hostBuilder.Configuration
-        .SetBasePath(AppContext.BaseDirectory);
-
-    if (hostBuilder.Environment.IsDevelopment())
-    {
-        hostBuilder.Configuration.AddUserSecrets<Program>(optional: true);
-    }
-
-    hostBuilder.Configuration
+        .SetBasePath(AppContext.BaseDirectory)
         .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
-        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
-        .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: false)
-        .AddJsonFile(userSettingsPath, optional: true, reloadOnChange: false)
-        .AddEnvironmentVariables();
+        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+        .AddJsonFile($"appsettings.{envName}.json", optional: true, reloadOnChange: true)
+        .AddJsonFile(userSettingsPath, optional: true, reloadOnChange: true)
+        .AddUserSecrets<Program>(optional: true)
+        .AddEnvironmentVariables()
+        .AddCommandLine(configArgs);
 
     var config = hostBuilder.Configuration;
 
@@ -327,6 +327,8 @@ try
         }
     }
 
+    var sessionApiKeyOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
     foreach (var providerName in activeProviders)
     {
         if (aiOptions.Providers.TryGetValue(providerName, out var providerConfig))
@@ -346,6 +348,7 @@ try
                     if (!string.IsNullOrWhiteSpace(enteredKey))
                     {
                         providerConfig.ApiKey = enteredKey.Trim();
+                        sessionApiKeyOverrides[providerName] = providerConfig.ApiKey;
                         var shouldSave = AnsiConsole.Confirm($"[dim]Bu anahtarı bir sonraki çalıştırmalar için kullanıcı profiline (~/.glossator/user_settings.json) kaydetmek ister misiniz?[/]", defaultValue: true);
                         if (shouldSave)
                         {
@@ -412,15 +415,19 @@ try
     // Per-chapter Scoped dependencies
     hostBuilder.Services.AddScoped(_ => new TermUsageTracker("default"));
     hostBuilder.Services.AddScoped<TermGlossingPostProcessor>();
-    hostBuilder.Services.AddSingleton<IExchangeRateService, ExchangeRateService>();
+    hostBuilder.Services.AddGlossatorExchangeRateService();
     hostBuilder.Services.AddSingleton<ParallelLocalizationEngine>();
 
-    hostBuilder.Services.Configure<GlossatorAiOptions>(opts =>
+    hostBuilder.Services.Configure<GlossatorAiOptions>(aiSection);
+    hostBuilder.Services.PostConfigure<GlossatorAiOptions>(opts =>
     {
-        opts.ActiveProvider = aiOptions.ActiveProvider;
-        opts.EnableSensitiveTelemetry = aiOptions.EnableSensitiveTelemetry;
-        opts.Providers = aiOptions.Providers;
-        opts.Agents = aiOptions.Agents;
+        foreach (var (providerName, overrideKey) in sessionApiKeyOverrides)
+        {
+            if (opts.Providers.TryGetValue(providerName, out var targetProvider))
+            {
+                targetProvider.ApiKey = overrideKey;
+            }
+        }
     });
     hostBuilder.Services.AddGlossatorAiClients();
 
@@ -1110,7 +1117,8 @@ static async Task HandleTranslationExceptionAsync(
                     targetProv.ApiKey = trimmed;
                 }
 
-                var optionsInstance = services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
+                var optionsInstance = services.GetService<IOptionsMonitor<GlossatorAiOptions>>()?.CurrentValue
+                    ?? services.GetService<IOptions<GlossatorAiOptions>>()?.Value;
                 if (optionsInstance != null && optionsInstance.Providers.TryGetValue(activeProviderName, out var optProv))
                 {
                     optProv.ApiKey = trimmed;
@@ -1191,14 +1199,10 @@ static async Task TrySaveApiKeyToUserSettingsAsync(string providerName, string n
 
         provider["ApiKey"] = newKey;
 
-        var dir = Path.GetDirectoryName(settingsPath);
-        if (!string.IsNullOrWhiteSpace(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
         var opts = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-        await File.WriteAllTextAsync(settingsPath, node.ToJsonString(opts));
+        await Glossator.Core.Services.AtomicFileWriter.WriteAllTextAsync(
+            settingsPath,
+            node.ToJsonString(opts));
 
         AnsiConsole.MarkupLine($"[bold green]OK:[/] '[cyan]{providerName}[/]' API anahtarı güvenle kullanıcı profiline (~/.glossator/user_settings.json) kaydedildi. [dim](Git'e asla sızmaz)[/]");
     }

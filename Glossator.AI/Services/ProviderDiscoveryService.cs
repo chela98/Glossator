@@ -59,7 +59,7 @@ public sealed record ProviderModelsResult(
 /// </summary>
 public sealed class ProviderDiscoveryService : IProviderDiscoveryService, IDisposable
 {
-    private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(15);
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
 
@@ -72,7 +72,13 @@ public sealed class ProviderDiscoveryService : IProviderDiscoveryService, IDispo
         }
         else
         {
-            _httpClient = new HttpClient { Timeout = DefaultRequestTimeout };
+            _httpClient = new HttpClient(new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(15)
+            })
+            {
+                Timeout = DefaultRequestTimeout
+            };
             _ownsHttpClient = true;
         }
     }

@@ -62,7 +62,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await _channel.Writer.WriteAsync(new FlushCommand(tcs), cancellationToken).ConfigureAwait(false);
 
-        await using var registration = cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+        using var registration = cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
         await tcs.Task.ConfigureAwait(false);
     }
 
@@ -74,7 +74,8 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         string chapterFile,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         const string sql = """
             SELECT BookId, ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt
@@ -82,13 +83,13 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
             WHERE BookId = @BookId AND ChapterFile = @ChapterFile AND StageStatus = 'Completed';
             """;
 
-        await using var command = new SqliteCommand(sql, connection);
+        using var command = new SqliteCommand(sql, connection);
         command.Parameters.AddWithValue("@BookId", string.IsNullOrWhiteSpace(bookId) ? "default" : bookId);
         command.Parameters.AddWithValue("@ChapterFile", chapterFile);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<int, SegmentCheckpoint>();
-        while (await reader.ReadAsync(cancellationToken))
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var cp = new SegmentCheckpoint
             {
@@ -116,13 +117,14 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         string chapterFile,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken);
+        var connection = await _connectionFactory.CreateOpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var _connectionScope = connection.ConfigureAwait(false);
 
         const string sql = "DELETE FROM SegmentCheckpoints WHERE BookId = @BookId AND ChapterFile = @ChapterFile;";
-        await using var command = new SqliteCommand(sql, connection);
+        using var command = new SqliteCommand(sql, connection);
         command.Parameters.AddWithValue("@BookId", string.IsNullOrWhiteSpace(bookId) ? "default" : bookId);
         command.Parameters.AddWithValue("@ChapterFile", chapterFile);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ProcessQueueAsync()
@@ -132,7 +134,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
 
         try
         {
-            while (await reader.WaitToReadAsync(_cts.Token))
+            while (await reader.WaitToReadAsync(_cts.Token).ConfigureAwait(false))
             {
                 batch.Clear();
                 var stopwatch = Stopwatch.StartNew();
@@ -147,7 +149,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                         }
                         else if (item is FlushCommand flush)
                         {
-                            await HandleFlushCommandAsync(flush, batch);
+                            await HandleFlushCommandAsync(flush, batch).ConfigureAwait(false);
                         }
                     }
                     else
@@ -159,7 +161,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                         waitCts.CancelAfter(remaining);
                         try
                         {
-                            if (!await reader.WaitToReadAsync(waitCts.Token)) break;
+                            if (!await reader.WaitToReadAsync(waitCts.Token).ConfigureAwait(false)) break;
                         }
                         catch (OperationCanceledException)
                         {
@@ -274,8 +276,10 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
         {
             try
             {
-                await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
-                await using var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+                var connection = await _connectionFactory.CreateOpenConnectionAsync(ct).ConfigureAwait(false);
+                await using var _connectionScope = connection.ConfigureAwait(false);
+                var transaction = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+                await using var _transactionScope = transaction.ConfigureAwait(false);
 
                 const string sql = """
                     INSERT INTO SegmentCheckpoints (BookId, ChapterFile, SegmentIndex, OriginalHash, TagName, OriginalText, TranslatedText, StageStatus, UpdatedAt)
@@ -289,7 +293,7 @@ public sealed class CheckpointStore : IAsyncDisposable, IDisposable
                         UpdatedAt = excluded.UpdatedAt;
                     """;
 
-                await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+                using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
                 var pBookId = cmd.Parameters.Add("@BookId", SqliteType.Text);
                 var pChapterFile = cmd.Parameters.Add("@ChapterFile", SqliteType.Text);
                 var pSegmentIndex = cmd.Parameters.Add("@SegmentIndex", SqliteType.Integer);

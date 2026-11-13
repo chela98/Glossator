@@ -113,7 +113,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
             attempt: state.AttemptCount,
             activity: activity,
             stepLogger: _stepLogger,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var rawResponse = streamResult.Text.Trim();
 
@@ -132,7 +132,8 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 Content: "İlk redaksiyon yanıtı JSON olarak ayrıştırılamadı. Modelden çıktısını temiz JSON formatında onarması isteniyor...",
                 Attempt: state.AttemptCount));
 
-            patchResult = await TrySelfRepairJsonAsync(rawResponse, state.AttemptCount, activity, cancellationToken);
+            patchResult = await TrySelfRepairJsonAsync(rawResponse, state.AttemptCount, activity, cancellationToken)
+                .ConfigureAwait(false);
             if (patchResult != null)
             {
                 activity?.SetTag("review.self_repair", "succeeded");
@@ -263,7 +264,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
 
         if (context != null)
         {
-            await context.YieldOutputAsync(approvedState, cancellationToken);
+            await context.YieldOutputAsync(approvedState, cancellationToken).ConfigureAwait(false);
         }
         return approvedState;
     }
@@ -308,7 +309,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 attempt: attempt,
                 activity: activity,
                 stepLogger: _stepLogger,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             var repairedText = repairStream.Text.Trim();
             return ParseReviewerResponse(repairedText);

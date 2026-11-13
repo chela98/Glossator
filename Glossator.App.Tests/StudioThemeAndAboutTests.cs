@@ -8,7 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 
-namespace Glossator.Tests.App;
+namespace Glossator.App.Tests;
 
 [Collection("GlobalDiagnosticsAndConsole")]
 public sealed class StudioThemeAndAboutTests : IDisposable
@@ -28,7 +28,7 @@ public sealed class StudioThemeAndAboutTests : IDisposable
     public async Task SaveThemePreferenceAsync_PersistsLightAndDarkThemesAndUpdatesConfiguration()
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
-        var service = new UserSettingsService(Options.Create(new GlossatorAiOptions()), config);
+        var service = new UserSettingsService(new TestOptionsMonitor<GlossatorAiOptions>(new GlossatorAiOptions()), config);
 
         Assert.True(service.IsDarkThemePreferred);
 
@@ -52,7 +52,7 @@ public sealed class StudioThemeAndAboutTests : IDisposable
     public async Task SaveStudioPreferencesAsync_PreservesPersistedThemePreference()
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection().Build();
-        var service = new UserSettingsService(Options.Create(new GlossatorAiOptions()), config);
+        var service = new UserSettingsService(new TestOptionsMonitor<GlossatorAiOptions>(new GlossatorAiOptions()), config);
 
         await service.SaveThemePreferenceAsync(false);
         await service.SaveStudioPreferencesAsync("http://localhost:4317", "Glossator.Studio", 43.25);

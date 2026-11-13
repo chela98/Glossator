@@ -16,13 +16,13 @@ public sealed class RateLimitingChatClient(
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        using var lease = await rateLimiter.AcquireAsync(permitCount: 1, cancellationToken);
+        using var lease = await rateLimiter.AcquireAsync(permitCount: 1, cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)
         {
             throw new InvalidOperationException("Merkezi RateLimiter kuyruğundan izin alınamadı (İstek reddedildi).");
         }
 
-        return await base.GetResponseAsync(messages, options, cancellationToken);
+        return await base.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
     }
 
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -30,13 +30,13 @@ public sealed class RateLimitingChatClient(
         ChatOptions? options = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        using var lease = await rateLimiter.AcquireAsync(permitCount: 1, cancellationToken);
+        using var lease = await rateLimiter.AcquireAsync(permitCount: 1, cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)
         {
             throw new InvalidOperationException("Merkezi RateLimiter kuyruğundan izin alınamadı (İstek reddedildi).");
         }
 
-        await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken))
+        await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken).ConfigureAwait(false))
         {
             yield return update;
         }

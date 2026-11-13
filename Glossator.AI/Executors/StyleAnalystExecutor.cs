@@ -52,7 +52,7 @@ public sealed class StyleAnalystExecutor : Executor<TranslationReviewState, Tran
             stageName: "StyleAnalyst",
             attempt: 1,
             stepLogger: _stepLogger,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         var styleGuide = !string.IsNullOrWhiteSpace(streamResult.Text)
             ? streamResult.Text.Trim()

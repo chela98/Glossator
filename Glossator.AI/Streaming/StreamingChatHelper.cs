@@ -76,7 +76,7 @@ public static class StreamingChatHelper
             try
             {
                 using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-                while (await timer.WaitForNextTickAsync(heartbeatCts.Token))
+                while (await timer.WaitForNextTickAsync(heartbeatCts.Token).ConfigureAwait(false))
                 {
                     if (Volatile.Read(ref ttftMs) >= 0)
                     {
@@ -99,7 +99,7 @@ public static class StreamingChatHelper
 
         try
         {
-            await foreach (var update in chatClient.GetStreamingResponseAsync(messages, cancellationToken: cancellationToken))
+            await foreach (var update in chatClient.GetStreamingResponseAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 updates.Add(update);
                 var text = update.Text;
@@ -148,7 +148,7 @@ public static class StreamingChatHelper
         {
             heartbeatCts.Cancel();
             // İstemci GetStreamingResponseAsync desteklemiyorsa (örn: temel test mock'ları) GetResponseAsync'e güvenli geri dönüş
-            var nonStreamingResp = await chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken);
+            var nonStreamingResp = await chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
             stopwatch.Stop();
 
             var nonStreamText = nonStreamingResp.Text?.Trim() ?? string.Empty;
