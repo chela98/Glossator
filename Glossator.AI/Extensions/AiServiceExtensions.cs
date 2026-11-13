@@ -1,9 +1,11 @@
 using System.ClientModel;
 using Glossator.AI.Configuration;
 using Glossator.AI.RateLimiting;
+using Glossator.AI.Services;
 using Glossator.AI.Workflows;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using OpenAI;
 
@@ -37,8 +39,35 @@ public static class AiServiceExtensions
         // 3. Reviewer Keyed Service
         RegisterAgentChatClient(services, KeyReviewer);
 
+        // 4. Sağlayıcı Ping ve Model Keşif Servisi
+        services.TryAddSingleton<IProviderDiscoveryService, ProviderDiscoveryService>();
+
         return services;
     }
+
+    internal static string ResolveEffectiveApiKey(string? apiKey, string endpoint)
+    {
+        return string.IsNullOrWhiteSpace(apiKey) || apiKey.Contains("YOUR_", StringComparison.OrdinalIgnoreCase)
+            ? (GlossatorAiOptions.IsLocalEndpoint(endpoint) ? "dummy-local-key" : apiKey ?? string.Empty)
+            : apiKey;
+    }
+
+#pragma warning disable OPENAI001
+    internal static OpenAI.Chat.ChatReasoningEffortLevel MapReasoningEffortLevel(string effort)
+    {
+        var normalized = effort.Trim();
+        return normalized.ToLowerInvariant() switch
+        {
+            "none" => OpenAI.Chat.ChatReasoningEffortLevel.None,
+            "minimal" => OpenAI.Chat.ChatReasoningEffortLevel.Minimal,
+            "low" => OpenAI.Chat.ChatReasoningEffortLevel.Low,
+            "medium" => OpenAI.Chat.ChatReasoningEffortLevel.Medium,
+            "high" => OpenAI.Chat.ChatReasoningEffortLevel.High,
+            "xhigh" => new OpenAI.Chat.ChatReasoningEffortLevel("xhigh"),
+            _ => new OpenAI.Chat.ChatReasoningEffortLevel(normalized)
+        };
+    }
+#pragma warning restore OPENAI001
 
     private static void RegisterAgentChatClient(IServiceCollection services, string agentRoleKey)
     {
@@ -54,9 +83,7 @@ public static class AiServiceExtensions
 
             options.Agents.TryGetValue(agentRoleKey, out var agentConfig);
 
-            var apiKey = string.IsNullOrWhiteSpace(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("YOUR_")
-                ? (providerConfig.Endpoint.Contains("localhost") || providerConfig.Endpoint.Contains("127.0.0.1") ? "dummy-local-key" : providerConfig.ApiKey)
-                : providerConfig.ApiKey;
+            var apiKey = ResolveEffectiveApiKey(providerConfig.ApiKey, providerConfig.Endpoint);
 
             var clientOptions = new OpenAIClientOptions
             {
@@ -101,7 +128,7 @@ public static class AiServiceExtensions
                 builder.UseRateLimiting(rateLimiter);
             }
 
-            // Eğer reasoning_effort tanımlanmışsa (örn: "none", "low", "medium", "high"),
+            // Eğer reasoning_effort tanımlanmışsa (örn: "none", "minimal", "low", "medium", "high", "xhigh"),
             // en iç katmanda doğrudan OpenAI SDK ChatCompletionOptions.ReasoningEffortLevel üzerinden enjekte et
             if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
             {
@@ -118,13 +145,7 @@ public static class AiServiceExtensions
                         var raw = prevFactory?.Invoke(client) as OpenAI.Chat.ChatCompletionOptions
                                   ?? new OpenAI.Chat.ChatCompletionOptions();
 #pragma warning disable OPENAI001
-                        raw.ReasoningEffortLevel = effort.ToLowerInvariant() switch
-                        {
-                            "low" => OpenAI.Chat.ChatReasoningEffortLevel.Low,
-                            "medium" => OpenAI.Chat.ChatReasoningEffortLevel.Medium,
-                            "high" => OpenAI.Chat.ChatReasoningEffortLevel.High,
-                            _ => new OpenAI.Chat.ChatReasoningEffortLevel(effort)
-                        };
+                        raw.ReasoningEffortLevel = MapReasoningEffortLevel(effort);
 #pragma warning restore OPENAI001
                         return raw;
                     };

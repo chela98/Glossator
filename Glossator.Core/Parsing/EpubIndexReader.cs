@@ -75,13 +75,15 @@ public static class EpubIndexReader
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(rawTerm) || rawTerm.Length < 2) continue;
+            if (string.IsNullOrWhiteSpace(rawTerm)) continue;
 
-            // Virgül kuralı: Virgülün solundaki gerçek teknik kavramı al
+            // Virgül kuralı: Virgülün solundaki gerçek teknik kavramı al, ardından uzunluğu kontrol et
             if (rawTerm.Contains(','))
             {
                 rawTerm = rawTerm.Split(',')[0].Trim();
             }
+
+            if (string.IsNullOrWhiteSpace(rawTerm) || rawTerm.Length < 2) continue;
 
             var normalized = rawTerm.ToLowerInvariant();
             if (ExcludedGenericTerms.Contains(normalized)) continue;

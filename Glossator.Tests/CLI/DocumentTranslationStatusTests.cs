@@ -87,6 +87,39 @@ public class DocumentTranslationStatusTests : IDisposable
         Assert.True(result, ".done mevcut olduğunda silinememiş .part dosyası tamamlanma durumunu bozmamalıdır.");
     }
 
+    [Fact]
+    public void IsDocumentTranslated_WhenSourceIsXhtml_DetectsTranslatedHtmlDoneFallback()
+    {
+        // Arrange: Orijinal .xhtml fakat çıktı .html uzantısıyla üretilmiş
+        File.WriteAllText(Path.Combine(_tempDir, "ch02_tr.html"), "<html></html>");
+        File.WriteAllText(Path.Combine(_tempDir, "ch02_tr.html.done"), "OK");
+
+        // Act
+        var result = DocumentTranslationStatus.IsDocumentTranslated(_tempDir, "ch02.xhtml");
+
+        // Assert
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsDocumentTranslated_WithSubfolderHref_ResolvesRelativeDirectoryCorrectly()
+    {
+        // Arrange
+        var textDir = Path.Combine(_tempDir, "text");
+        Directory.CreateDirectory(textDir);
+        File.WriteAllText(Path.Combine(textDir, "ch01_tr.xhtml"), "<html></html>");
+        File.WriteAllText(Path.Combine(textDir, "ch01_tr.xhtml.part"), "partial");
+
+        // Act
+        var partialResult = DocumentTranslationStatus.IsDocumentTranslated(_tempDir, "text/ch01.xhtml");
+        File.WriteAllText(Path.Combine(textDir, "ch01_tr.xhtml.done"), "done");
+        var completedResult = DocumentTranslationStatus.IsDocumentTranslated(_tempDir, "text/ch01.xhtml");
+
+        // Assert
+        Assert.False(partialResult);
+        Assert.True(completedResult);
+    }
+
     public void Dispose()
     {
         try

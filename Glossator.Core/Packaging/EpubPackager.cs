@@ -199,7 +199,7 @@ public static class EpubPackager
             var trRelativeHref = string.IsNullOrEmpty(dirName) ? trFileName : Path.Combine(dirName, trFileName).Replace('\\', '/');
             var trFullPath = Path.Combine(package.OpfDirectory, trRelativeHref);
 
-            if (File.Exists(trFullPath))
+            if (File.Exists(trFullPath) && !IsPartialOnly(trFullPath))
             {
                 map[item.Href] = trRelativeHref;
                 continue;
@@ -215,7 +215,7 @@ public static class EpubPackager
                 var altRelativeHref = string.IsNullOrEmpty(dirName) ? altFileName : Path.Combine(dirName, altFileName).Replace('\\', '/');
                 var altFullPath = Path.Combine(package.OpfDirectory, altRelativeHref);
 
-                if (File.Exists(altFullPath))
+                if (File.Exists(altFullPath) && !IsPartialOnly(altFullPath))
                 {
                     map[item.Href] = altRelativeHref;
                     break;
@@ -225,6 +225,9 @@ public static class EpubPackager
 
         return map;
     }
+
+    private static bool IsPartialOnly(string translatedFullPath)
+        => File.Exists(translatedFullPath + ".part") && !File.Exists(translatedFullPath + ".done");
 
     /// <summary>
     /// OPF dosyasını Türkçe metadata ve çevrilmiş manifest/spine linkleriyle günceller.

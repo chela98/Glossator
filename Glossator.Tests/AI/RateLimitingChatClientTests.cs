@@ -82,13 +82,14 @@ public class RateLimitingChatClientTests
     }
 
     [Fact]
-    public async Task BuilderExtension_WiresMiddlewareSuccessfullyAndExecutesCall()
+    public async Task BuilderExtension_WiresMiddlewareSuccessfullyAndEnforcesRateLimit()
     {
+        // Arrange
         var inner = new TestChatClient();
         using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
         {
-            TokenLimit = 10,
-            TokensPerPeriod = 10,
+            TokenLimit = 1,
+            TokensPerPeriod = 1,
             ReplenishmentPeriod = TimeSpan.FromMinutes(1),
             QueueLimit = 0
         });
@@ -97,11 +98,33 @@ public class RateLimitingChatClientTests
             .UseRateLimiting(limiter)
             .Build();
 
-        Assert.NotNull(client);
-
+        // Act
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello Builder")]);
-        Assert.NotNull(response);
+
+        // Assert
+        Assert.Equal("Test Response", response.Text);
         Assert.Equal(1, inner.CallCount);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "Second")]));
+    }
+
+    [Fact]
+    public void UseRateLimiting_WithNullBuilderOrLimiter_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var inner = new TestChatClient();
+        using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 1,
+            TokensPerPeriod = 1,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1)
+        });
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() =>
+            ((ChatClientBuilder)null!).UseRateLimiting(limiter));
+        Assert.Throws<ArgumentNullException>(() =>
+            inner.AsBuilder().UseRateLimiting(null!));
     }
 
     [Fact]

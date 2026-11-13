@@ -1,0 +1,38 @@
+<UserControl x:Class="Glossator.App.Views.Controls.BookCoverControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border x:Name="RootBorder"
+            CornerRadius="{Binding CoverCornerRadius, RelativeSource={RelativeSource AncestorType=UserControl}}"
+            BorderBrush="#33FFFFFF"
+            BorderThickness="1"
+            SnapsToDevicePixels="True"
+            Background="{Binding FallbackHex, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource HexToBrushConverter}}">
+        <Grid>
+            <!-- Yedek monogram & ince derinlik gradyanı -->
+            <Border CornerRadius="{Binding CoverCornerRadius, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#22FFFFFF" Offset="0"/>
+                        <GradientStop Color="#00000000" Offset="0.55"/>
+                        <GradientStop Color="#55000000" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <TextBlock Text="{Binding Monogram, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontWeight="Bold"
+                           Foreground="#EEFFFFFF"
+                           FontSize="{Binding MonogramFontSize, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+            </Border>
+
+            <!-- Gerçek kapak görseli (ImageBrush köşe yarıçapını otomatik uygular; yoksa şeffaf kalır) -->
+            <Border CornerRadius="{Binding CoverCornerRadius, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    RenderOptions.BitmapScalingMode="HighQuality">
+                <Border.Background>
+                    <ImageBrush ImageSource="{Binding CoverPath, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource PathToBitmapConverter}}"
+                                Stretch="UniformToFill"/>
+                </Border.Background>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>

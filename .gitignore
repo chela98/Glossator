@@ -368,6 +368,5 @@ FodyWeavers.xsd
 **/appsettings.json
 **/appsettings.Development.json
 !**/appsettings.example.json
-/roadmap.md
 /GLOSSATOR_AUDIT_AND_ACTION_PLAN.md
 /ROADMAP_ISSUES_ROOT_CAUSE.md

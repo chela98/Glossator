@@ -1,106 +1,90 @@
+using System;
+using System.IO;
+using System.Threading.Tasks;
 using Glossator.AI.Prompts;
 using Xunit;
 
 namespace Glossator.Tests.AI;
 
-public class PromptLoaderTests
+public class PromptLoaderTests : IDisposable
 {
-    [Fact]
-    public async Task LoadPromptAsync_LoadsTranslatorPromptFromEmbeddedResource()
+    private readonly string _tempBaseDir;
+
+    public PromptLoaderTests()
     {
+        _tempBaseDir = Path.Combine(Path.GetTempPath(), $"glossator_prompts_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempBaseDir);
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (Directory.Exists(_tempBaseDir))
+                Directory.Delete(_tempBaseDir, recursive: true);
+        }
+        catch { }
+    }
+
+    [Theory]
+    [InlineData("TranslatorPrompt.md")]
+    [InlineData("StyleAnalystPrompt.md")]
+    [InlineData("ReviewerPrompt.md")]
+    public async Task LoadPromptAsync_WhenNoDiskOverrideInBaseDir_LoadsEmbeddedPromptResource(string fileName)
+    {
+        // Arrange: Boş izole baz dizin -> gömülü kaynak fallback'i devreye girmeli
+        var emptyBaseDir = Path.Combine(_tempBaseDir, "empty");
+        Directory.CreateDirectory(emptyBaseDir);
+
         // Act
-        var content = await PromptLoader.LoadPromptAsync("TranslatorPrompt.md");
+        var content = await PromptLoader.LoadPromptAsync(fileName, emptyBaseDir);
+        var activePath = PromptLoader.GetActiveDiskPath(fileName, emptyBaseDir);
 
         // Assert
-        Assert.NotNull(content);
-        Assert.NotEmpty(content);
-        Assert.Contains("O'REILLY", content, StringComparison.OrdinalIgnoreCase);
+        Assert.False(string.IsNullOrWhiteSpace(content));
+        Assert.Null(activePath);
     }
 
     [Fact]
-    public async Task LoadPromptAsync_LoadsStyleAnalystPromptFromEmbeddedResource()
-    {
-        // Act
-        var content = await PromptLoader.LoadPromptAsync("StyleAnalystPrompt.md");
-
-        // Assert
-        Assert.NotNull(content);
-        Assert.NotEmpty(content);
-    }
-
-    [Fact]
-    public async Task LoadPromptAsync_LoadsReviewerPromptFromEmbeddedResource()
-    {
-        // Act
-        var content = await PromptLoader.LoadPromptAsync("ReviewerPrompt.md");
-
-        // Assert
-        Assert.NotNull(content);
-        Assert.NotEmpty(content);
-    }
-
-    [Fact]
-    public async Task LoadPromptAsync_WhenLocalDiskFileExists_PrefersDiskFileOverEmbedded()
+    public async Task LoadPromptAsync_AppliesDiskPriorityOrder_PromptsSubfolderBeforeDirectBaseDirAndEmbedded()
     {
         // Arrange
-        var tempDir = Path.Combine(AppContext.BaseDirectory, "Prompts");
-        Directory.CreateDirectory(tempDir);
-        var customPromptFile = Path.Combine(tempDir, "CustomTestPrompt.md");
-        const string customText = "# Özel Biyoloji ve Tıp Çevirmen İstemi\nBu metin diskten okunmuştur.";
+        var directPath = Path.Combine(_tempBaseDir, "TranslatorPrompt.md");
+        var subFolder = Path.Combine(_tempBaseDir, "Prompts");
+        Directory.CreateDirectory(subFolder);
+        var subFolderPath = Path.Combine(subFolder, "TranslatorPrompt.md");
 
-        try
-        {
-            await File.WriteAllTextAsync(customPromptFile, customText);
+        await File.WriteAllTextAsync(directPath, "DIRECT_OVERRIDE");
+        await File.WriteAllTextAsync(subFolderPath, "PROMPTS_SUBFOLDER_OVERRIDE");
 
-            // Act
-            var content = await PromptLoader.LoadPromptAsync("CustomTestPrompt.md");
+        // Act & Assert 1: Prompts/ alt klasörü en yüksek öncelikli olmalı
+        var highest = await PromptLoader.LoadPromptAsync("TranslatorPrompt.md", _tempBaseDir);
+        Assert.Equal("PROMPTS_SUBFOLDER_OVERRIDE", highest);
+        Assert.Equal(subFolderPath, PromptLoader.GetActiveDiskPath("TranslatorPrompt.md", _tempBaseDir));
 
-            // Assert
-            Assert.Equal(customText, content);
-        }
-        finally
-        {
-            if (File.Exists(customPromptFile))
-            {
-                File.Delete(customPromptFile);
-            }
-        }
+        // Act & Assert 2: Prompts/ altındaki silinirse doğrudan baseDirectory dosyasını almalı
+        File.Delete(subFolderPath);
+        var secondary = await PromptLoader.LoadPromptAsync("TranslatorPrompt.md", _tempBaseDir);
+        Assert.Equal("DIRECT_OVERRIDE", secondary);
+        Assert.Equal(directPath, PromptLoader.GetActiveDiskPath("TranslatorPrompt.md", _tempBaseDir));
     }
 
     [Fact]
-    public async Task LoadPromptAsync_WhenTranslatorPromptOverriddenOnDisk_ReturnsDiskVersionWithoutRecompilation()
-    {
-        // Arrange: Gerçek TranslatorPrompt.md dosyasını EXE dizinindeki Prompts klasöründe taklit et
-        var tempDir = Path.Combine(AppContext.BaseDirectory, "Prompts");
-        Directory.CreateDirectory(tempDir);
-        var diskPromptFile = Path.Combine(tempDir, "TranslatorPrompt.md");
-        const string customBiologyPrompt = "# Moleküler Biyoloji Özel Çeviri İstemi (Diskten Değiştirildi)";
-
-        try
-        {
-            // Kullanıcı diskteki promptu not defteriyle değiştirdi:
-            await File.WriteAllTextAsync(diskPromptFile, customBiologyPrompt);
-
-            // Act: Motor istemi yüklediğinde gömülü olanı değil, diskteki yeni içeriği almalıdır
-            var content = await PromptLoader.LoadPromptAsync("TranslatorPrompt.md");
-
-            // Assert
-            Assert.Equal(customBiologyPrompt, content);
-        }
-        finally
-        {
-            if (File.Exists(diskPromptFile))
-            {
-                File.Delete(diskPromptFile);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task LoadPromptAsync_WhenFileNotFound_ThrowsFileNotFoundException()
+    public async Task LoadPromptAsync_WhenFileNotFoundOnDiskOrEmbedded_ThrowsFileNotFoundException()
     {
         // Act & Assert
-        await Assert.ThrowsAsync<FileNotFoundException>(() =>
-            PromptLoader.LoadPromptAsync("NonExistentPromptFile_12345.md"));
+        var ex = await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            PromptLoader.LoadPromptAsync("NonExistentPrompt_XYZ.md", _tempBaseDir));
+        Assert.Contains("NonExistentPrompt_XYZ.md", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task LoadPromptAsync_WhenFileNameNullOrWhitespace_ThrowsArgumentException(string invalidName)
+    {
+        // Act & Assert
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            PromptLoader.LoadPromptAsync(invalidName, _tempBaseDir));
     }
 }

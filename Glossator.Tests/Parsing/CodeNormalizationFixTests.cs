@@ -19,14 +19,17 @@ public class CodeNormalizationFixTests
         // Act
         var (doc, segments) = HtmlSegmenter.SegmentHtml(html);
 
-        // Assert: Paragraphs must never be nested inside code elements
+        // Assert: Paragraphs must never be nested inside code elements and must be segmented cleanly
         var pList = doc.QuerySelectorAll("p");
         Assert.Equal(2, pList.Length);
         foreach (var p in pList)
         {
-            var parent = p.ParentElement;
-            Assert.NotEqual("code", parent?.TagName?.ToLowerInvariant());
+            Assert.NotEqual("code", p.ParentElement?.TagName?.ToLowerInvariant());
         }
+
+        Assert.Equal(2, segments.Count);
+        Assert.Equal("First body paragraph outside pre", segments[0].MaskedText);
+        Assert.Equal("Second body paragraph outside pre", segments[1].MaskedText);
     }
 
     [Theory]
@@ -36,7 +39,10 @@ public class CodeNormalizationFixTests
     [InlineData(@"<kbd class=""key""/>", @"<kbd class=""key""></kbd>")]
     public void NormalizeXhtmlContent_InlineSelfClosingTags_AreExpandedToFullPairs(string input, string expected)
     {
+        // Act
         var result = HtmlSegmenter.NormalizeXhtmlContent(input);
+
+        // Assert
         Assert.Equal(expected, result);
     }
 }

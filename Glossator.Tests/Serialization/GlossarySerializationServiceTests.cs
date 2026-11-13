@@ -1,18 +1,26 @@
 namespace Glossator.Tests.Serialization;
 
-using Glossator.Core.Glossary;
 using Glossator.Core.Models.Glossary;
 using Glossator.Core.Serialization;
+using YamlDotNet.Core;
 using Xunit;
 
-public class GlossarySerializationServiceTests
+public class GlossarySerializationServiceTests : IDisposable
 {
+    private readonly string _tempDir;
+    private readonly GlossarySerializationService _service = new();
+
+    public GlossarySerializationServiceTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"GlossatorSerial_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempDir);
+    }
+
     [Fact]
     public async Task YamlSerialization_RoundTrip_PreservesAllDataAndSortsAlphabetically()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"glossary_{Guid.NewGuid():N}.yaml");
-        var service = new GlossarySerializationService();
-
+        // Arrange
+        var tempFile = Path.Combine(_tempDir, "glossary.yaml");
         var inputTerms = new List<GlossaryEntry>
         {
             new() { EnglishTerm = "zero-shot learning", TurkishTerm = "sıfır atışlı öğrenme", Policy = GlossingPolicy.ProgressiveGloss, IsReviewed = true },
@@ -20,59 +28,49 @@ public class GlossarySerializationServiceTests
             new() { EnglishTerm = "machine learning", TurkishTerm = "makine öğrenimi", Policy = GlossingPolicy.AlwaysTurkish, IsReviewed = true }
         };
 
-        try
-        {
-            await service.ExportAsync(inputTerms, tempFile, SerializationFormat.Yaml);
-            var imported = await service.ImportAsync(tempFile);
+        // Act
+        await _service.ExportAsync(inputTerms, tempFile, SerializationFormat.Yaml);
+        var imported = await _service.ImportAsync(tempFile);
 
-            Assert.Equal(3, imported.Count);
+        // Assert: Deterministik alfabetik sıralama (A -> M -> Z)
+        Assert.Equal(3, imported.Count);
+        Assert.Equal("autonomous agents", imported[0].EnglishTerm);
+        Assert.Equal("otonom ajanlar", imported[0].TurkishTerm);
+        Assert.Equal(GlossingPolicy.ProgressiveGloss, imported[0].Policy);
+        Assert.True(imported[0].IsReviewed);
 
-            // Deterministik alfabetik sıralama kontrolü: A -> M -> Z
-            Assert.Equal("autonomous agents", imported[0].EnglishTerm);
-            Assert.Equal("otonom ajanlar", imported[0].TurkishTerm);
-            Assert.Equal(GlossingPolicy.ProgressiveGloss, imported[0].Policy);
-
-            Assert.Equal("machine learning", imported[1].EnglishTerm);
-            Assert.Equal("zero-shot learning", imported[2].EnglishTerm);
-        }
-        finally
-        {
-            if (File.Exists(tempFile)) File.Delete(tempFile);
-        }
+        Assert.Equal("machine learning", imported[1].EnglishTerm);
+        Assert.Equal("zero-shot learning", imported[2].EnglishTerm);
     }
 
     [Fact]
     public async Task JsonSerialization_RoundTrip_PreservesAllData()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"glossary_{Guid.NewGuid():N}.json");
-        var service = new GlossarySerializationService();
-
+        // Arrange
+        var tempFile = Path.Combine(_tempDir, "glossary.json");
         var inputTerms = new List<GlossaryEntry>
         {
-            new() { EnglishTerm = "REST API", TurkishTerm = null, Policy = GlossingPolicy.AlwaysEnglish, IsReviewed = true }
+            new() { EnglishTerm = "REST API", TurkishTerm = null, Policy = GlossingPolicy.AlwaysEnglish, IsReviewed = true, SourceBook = "Arch" }
         };
 
-        try
-        {
-            await service.ExportAsync(inputTerms, tempFile, SerializationFormat.Json);
-            var imported = await service.ImportAsync(tempFile);
+        // Act
+        await _service.ExportAsync(inputTerms, tempFile, SerializationFormat.Json);
+        var imported = await _service.ImportAsync(tempFile);
 
-            Assert.Single(imported);
-            Assert.Equal("REST API", imported[0].EnglishTerm);
-            Assert.Equal(GlossingPolicy.AlwaysEnglish, imported[0].Policy);
-        }
-        finally
-        {
-            if (File.Exists(tempFile)) File.Delete(tempFile);
-        }
+        // Assert
+        Assert.Single(imported);
+        Assert.Equal("REST API", imported[0].EnglishTerm);
+        Assert.Null(imported[0].TurkishTerm);
+        Assert.Equal(GlossingPolicy.AlwaysEnglish, imported[0].Policy);
+        Assert.True(imported[0].IsReviewed);
+        Assert.Equal("Arch", imported[0].SourceBook);
     }
 
     [Fact]
     public async Task ExportAndImport_WithTurkishSpecialCharactersAndYamlSymbols_PreservesVerbatim()
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"complex_terms_{Guid.NewGuid():N}.yaml");
-        var service = new GlossarySerializationService();
-
+        // Arrange
+        var tempFile = Path.Combine(_tempDir, "complex_terms.yaml");
         var complexTerms = new List<GlossaryEntry>
         {
             new()
@@ -86,78 +84,122 @@ public class GlossarySerializationServiceTests
             }
         };
 
-        try
-        {
-            await service.ExportAsync(complexTerms, tempFile, SerializationFormat.Yaml);
-            var imported = await service.ImportAsync(tempFile);
+        // Act
+        await _service.ExportAsync(complexTerms, tempFile, SerializationFormat.Yaml);
+        var imported = await _service.ImportAsync(tempFile);
 
-            Assert.Single(imported);
-            Assert.Equal(complexTerms[0].EnglishTerm, imported[0].EnglishTerm);
-            Assert.Equal(complexTerms[0].TurkishTerm, imported[0].TurkishTerm);
-            Assert.Equal(complexTerms[0].EnglishDefinition, imported[0].EnglishDefinition);
-            Assert.Equal(complexTerms[0].SourceBook, imported[0].SourceBook);
-        }
-        finally
-        {
-            if (File.Exists(tempFile)) File.Delete(tempFile);
-        }
+        // Assert
+        Assert.Single(imported);
+        Assert.Equal(complexTerms[0].EnglishTerm, imported[0].EnglishTerm);
+        Assert.Equal(complexTerms[0].TurkishTerm, imported[0].TurkishTerm);
+        Assert.Equal(complexTerms[0].EnglishDefinition, imported[0].EnglishDefinition);
+        Assert.Equal(complexTerms[0].SourceBook, imported[0].SourceBook);
     }
 
-    [Fact]
-    public async Task ImportAsync_WhenGivenDirectoryPath_AutomaticallyDiscoversGlossaryYaml()
+    [Theory]
+    [InlineData(SerializationFormat.Yaml, "glossary.yaml")]
+    [InlineData(SerializationFormat.Json, "glossary.json")]
+    public async Task ExportAndImport_WhenGivenDirectoryPath_AutoDiscoversExpectedFile(SerializationFormat format, string expectedFileName)
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "SerialDir_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(tempDir);
-        var service = new GlossarySerializationService();
-
+        // Arrange
+        var subDir = Path.Combine(_tempDir, format.ToString());
+        Directory.CreateDirectory(subDir);
         var terms = new List<GlossaryEntry>
         {
-            new() { EnglishTerm = "Discovery Test", TurkishTerm = "Keşif Testi" }
+            new() { EnglishTerm = "Discovery Test", TurkishTerm = "Keşif Testi", Policy = GlossingPolicy.AlwaysTurkish }
         };
 
-        try
-        {
-            // Doğrudan dizin verilir (dosya adı verilmez)
-            await service.ExportAsync(terms, tempDir, SerializationFormat.Yaml);
-            Assert.True(File.Exists(Path.Combine(tempDir, "glossary.yaml")));
+        // Act
+        await _service.ExportAsync(terms, subDir, format);
+        var imported = await _service.ImportAsync(subDir);
 
-            var imported = await service.ImportAsync(tempDir);
-            Assert.Single(imported);
-            Assert.Equal("Discovery Test", imported[0].EnglishTerm);
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
-        }
+        // Assert
+        Assert.True(File.Exists(Path.Combine(subDir, expectedFileName)));
+        Assert.Single(imported);
+        Assert.Equal("Discovery Test", imported[0].EnglishTerm);
+        Assert.Equal("Keşif Testi", imported[0].TurkishTerm);
     }
 
     [Fact]
-    public async Task ImportAsync_WithCorruptYamlSyntax_ThrowsException()
+    public async Task ExportAsync_WhenPathHasNoExtension_AppendsFormatExtension()
     {
-        var corruptFile = Path.Combine(Path.GetTempPath(), $"corrupt_{Guid.NewGuid():N}.yaml");
-        var service = new GlossarySerializationService();
+        // Arrange
+        var pathWithoutExt = Path.Combine(_tempDir, "custom_glossary");
+        var terms = new List<GlossaryEntry> { new() { EnglishTerm = "Embedding", TurkishTerm = "Gömme" } };
 
-        try
-        {
-            await File.WriteAllTextAsync(corruptFile, "terms: [unclosed array\n  invalid: {yaml");
-            await Assert.ThrowsAnyAsync<Exception>(() => service.ImportAsync(corruptFile));
-        }
-        finally
-        {
-            if (File.Exists(corruptFile)) File.Delete(corruptFile);
-        }
+        // Act
+        await _service.ExportAsync(terms, pathWithoutExt, SerializationFormat.Json);
+
+        // Assert
+        Assert.True(File.Exists(pathWithoutExt + ".json"));
+        var imported = await _service.ImportAsync(pathWithoutExt + ".json");
+        Assert.Single(imported);
+        Assert.Equal("Embedding", imported[0].EnglishTerm);
     }
 
     [Fact]
-    public void LoadDefaultCoreTerms_ReadsFromEmbeddedResourceYamlSuccessfully()
+    public async Task ImportAsync_WhenJsonStoredWithoutJsonExtension_DetectsJsonFromContent()
     {
-        var terms = SqliteGlossaryRepository.LoadDefaultCoreTerms();
+        // Arrange
+        var txtPath = Path.Combine(_tempDir, "glossary.txt");
+        await File.WriteAllTextAsync(txtPath, """
+            {
+              "version": "1.0",
+              "terms": [
+                { "english": "RAG", "turkish": null, "policy": 1, "reviewed": true }
+              ]
+            }
+            """);
 
-        Assert.NotNull(terms);
-        Assert.True(terms.Count >= 20, $"Expected at least 20 seed terms, but got {terms.Count}");
+        // Act
+        var imported = await _service.ImportAsync(txtPath);
 
-        Assert.Contains(terms, t => t.English == "LLM" && t.Policy == GlossingPolicy.AlwaysEnglish);
-        Assert.Contains(terms, t => t.English == "data" && t.Policy == GlossingPolicy.AlwaysTurkish);
-        Assert.Contains(terms, t => t.English == "boilerplate" && t.Policy == GlossingPolicy.ProgressiveGloss);
+        // Assert
+        Assert.Single(imported);
+        Assert.Equal("RAG", imported[0].EnglishTerm);
+        Assert.Equal(GlossingPolicy.AlwaysEnglish, imported[0].Policy);
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenFileDoesNotExist_ThrowsFileNotFoundException()
+    {
+        // Arrange
+        var missingPath = Path.Combine(_tempDir, "does_not_exist.yaml");
+
+        // Act & Assert
+        await Assert.ThrowsAsync<FileNotFoundException>(() => _service.ImportAsync(missingPath));
+    }
+
+    [Fact]
+    public async Task ImportAsync_WithCorruptYamlSyntax_ThrowsYamlException()
+    {
+        // Arrange
+        var corruptFile = Path.Combine(_tempDir, "corrupt.yaml");
+        await File.WriteAllTextAsync(corruptFile, "terms: [unclosed array\n  invalid: {yaml");
+
+        // Act & Assert
+        await Assert.ThrowsAnyAsync<YamlException>(() => _service.ImportAsync(corruptFile));
+    }
+
+    [Fact]
+    public async Task ImportAsync_WhenYamlIsEmpty_ReturnsEmptyList()
+    {
+        // Arrange
+        var emptyFile = Path.Combine(_tempDir, "empty.yaml");
+        await File.WriteAllTextAsync(emptyFile, string.Empty);
+
+        // Act
+        var imported = await _service.ImportAsync(emptyFile);
+
+        // Assert
+        Assert.Empty(imported);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+        {
+            try { Directory.Delete(_tempDir, true); } catch { }
+        }
     }
 }

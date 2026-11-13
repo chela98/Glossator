@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Glossator.Tests.AI;
 
+[Collection("GlobalDiagnosticsAndConsole")]
 public class StreamingChatHelperTests
 {
     private sealed class StreamingMockChatClient : IChatClient
@@ -121,18 +122,19 @@ public class StreamingChatHelperTests
             "hızlı yanıt üretir. ",
             "[/BLOK_001]"
         };
-        var client = new StreamingMockChatClient(chunks, delayMs: 1);
+        var client = new StreamingMockChatClient(chunks);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Test") };
 
-        using var activitySource = new ActivitySource("Glossator.Tests");
+        using var activitySource = new ActivitySource("Glossator.Tests.StreamingHelper");
         using var listener = new ActivityListener
         {
-            ShouldListenTo = s => s.Name == "Glossator.Tests",
+            ShouldListenTo = s => s.Name == "Glossator.Tests.StreamingHelper",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
         };
         ActivitySource.AddActivityListener(listener);
 
         using var testActivity = activitySource.StartActivity("TestStreamingActivity");
+        Assert.NotNull(testActivity);
 
         var progressLogs = new List<PipelineStepLog>();
 
@@ -146,22 +148,17 @@ public class StreamingChatHelperTests
             stepLogger: log => progressLogs.Add(log));
 
         // Assert
-        Assert.NotNull(result);
         var expectedText = string.Concat(chunks);
         Assert.Equal(expectedText, result.Text);
-        Assert.True(result.TimeToFirstTokenMs >= 0, "TTFT should be non-negative");
-        Assert.True(result.TokensPerSecond >= 0, "TPS should be non-negative");
-        Assert.True(result.OutputTokens > 0, "Output tokens should be greater than zero");
+        Assert.True(result.TimeToFirstTokenMs >= 0);
+        Assert.True(result.TokensPerSecond > 0);
+        Assert.True(result.OutputTokens > 0);
         Assert.NotEmpty(progressLogs);
-        Assert.All(progressLogs, log => Assert.True(log.IsTransient, "Intermediate streaming progress logs must be marked as IsTransient"));
+        Assert.All(progressLogs, log => Assert.True(log.IsTransient));
 
-        if (testActivity != null)
-        {
-            var streamingTag = testActivity.GetTagItem("gen_ai.response.streaming");
-            Assert.Equal(true, streamingTag);
-            Assert.NotNull(testActivity.GetTagItem("gen_ai.response.ttft_ms"));
-            Assert.NotNull(testActivity.GetTagItem("gen_ai.response.tps"));
-        }
+        Assert.Equal(true, testActivity.GetTagItem("gen_ai.response.streaming"));
+        Assert.NotNull(testActivity.GetTagItem("gen_ai.response.ttft_ms"));
+        Assert.NotNull(testActivity.GetTagItem("gen_ai.response.tps"));
     }
 
     [Fact]
@@ -184,14 +181,15 @@ public class StreamingChatHelperTests
         var client = new CustomUpdatesChatClient(updates);
         var messages = new List<ChatMessage> { new(ChatRole.User, "Usage test") };
 
-        using var activitySource = new ActivitySource("Glossator.Tests");
+        using var activitySource = new ActivitySource("Glossator.Tests.Cumulative");
         using var listener = new ActivityListener
         {
-            ShouldListenTo = s => s.Name == "Glossator.Tests",
+            ShouldListenTo = s => s.Name == "Glossator.Tests.Cumulative",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
         };
         ActivitySource.AddActivityListener(listener);
         using var testActivity = activitySource.StartActivity("TestUsageActivity");
+        Assert.NotNull(testActivity);
 
         // Act
         var result = await StreamingChatHelper.StreamResponseAsync(
@@ -201,19 +199,84 @@ public class StreamingChatHelperTests
             activity: testActivity);
 
         // Assert
-        Assert.NotNull(result);
         Assert.NotNull(result.Response?.Usage);
-        // Eskiden 5 * 2100 = 10500 oluyordu. Artık son chunk'ın gerçek kümülatif değeri (2100) korunmalı!
         Assert.Equal(2100, result.Response.Usage.InputTokenCount);
         Assert.Equal(250, result.BilledOutputTokens);
         Assert.Equal(2350, result.Response.Usage.TotalTokenCount);
 
-        if (testActivity != null)
+        Assert.Equal(2100L, testActivity.GetTagItem("gen_ai.usage.input_tokens"));
+        Assert.Equal(250L, testActivity.GetTagItem("gen_ai.usage.output_tokens"));
+        Assert.Equal(2350L, testActivity.GetTagItem("gen_ai.usage.total_tokens"));
+    }
+
+    [Fact]
+    public async Task StreamResponseAsync_WithExplicitReasoningTokenCount_ComputesVisibleVsBilledTokens()
+    {
+        // Arrange
+        var usage = new UsageDetails
         {
-            Assert.Equal(2100L, testActivity.GetTagItem("gen_ai.usage.input_tokens"));
-            Assert.Equal(250L, testActivity.GetTagItem("gen_ai.usage.output_tokens"));
-            Assert.Equal(2350L, testActivity.GetTagItem("gen_ai.usage.total_tokens"));
-        }
+            InputTokenCount = 500,
+            OutputTokenCount = 820,
+            TotalTokenCount = 1320,
+            AdditionalCounts = new AdditionalPropertiesDictionary<long>
+            {
+                ["OutputTokenDetails.ReasoningTokenCount"] = 700
+            }
+        };
+        var update = new ChatResponseUpdate(ChatRole.Assistant, "Visible reply text.");
+        update.Contents.Add(new UsageContent(usage));
+        var client = new CustomUpdatesChatClient([update]);
+
+        using var activitySource = new ActivitySource("Glossator.Tests.Reasoning");
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == "Glossator.Tests.Reasoning",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var activity = activitySource.StartActivity("ReasoningActivity");
+        Assert.NotNull(activity);
+
+        // Act
+        var result = await StreamingChatHelper.StreamResponseAsync(
+            client,
+            [new ChatMessage(ChatRole.User, "Reason")],
+            stageName: "Reviewer",
+            activity: activity);
+
+        // Assert
+        Assert.Equal(820, result.BilledOutputTokens);
+        Assert.Equal(120, result.OutputTokens); // 820 - 700 reasoning
+        Assert.Equal(700L, activity.GetTagItem("gen_ai.usage.reasoning_tokens"));
+        Assert.Equal(120L, activity.GetTagItem("gen_ai.usage.text_tokens"));
+        Assert.Equal(820L, activity.GetTagItem("gen_ai.usage.output_tokens"));
+    }
+
+    [Theory]
+    [InlineData(100, 100, 1, "Fatura:")]
+    [InlineData(100, 350, 2, "Fatura:")]
+    public void StreamingChatResult_FormatSummary_FormatsBilledAndAttemptConditionally(
+        long outputTokens,
+        long billedTokens,
+        int attempt,
+        string billedMarker)
+    {
+        // Arrange
+        var result = new StreamingChatResult(null, "text", 250, 42.5, outputTokens, billedTokens, 50.0);
+
+        // Act
+        var summary = result.FormatSummary(attempt);
+
+        // Assert
+        if (billedTokens - outputTokens > 100)
+            Assert.Contains(billedMarker, summary);
+        else
+            Assert.DoesNotContain(billedMarker, summary);
+
+        if (attempt > 1)
+            Assert.Contains($"Deneme: {attempt}", summary);
+        else
+            Assert.DoesNotContain("Deneme:", summary);
     }
 
     [Fact]
@@ -232,11 +295,26 @@ public class StreamingChatHelperTests
             attempt: 1);
 
         // Assert
-        Assert.NotNull(result);
         Assert.Equal(expectedText, result.Text);
         Assert.NotNull(result.Response);
-        Assert.True(result.TimeToFirstTokenMs >= 0);
-        Assert.True(result.TokensPerSecond >= 0);
+        Assert.True(result.OutputTokens >= 1);
+        Assert.True(result.OverallThroughput > 0);
+    }
+
+    [Fact]
+    public async Task StreamResponseAsync_WhenCancelledMidStream_PropagatesOperationCanceledException()
+    {
+        // Arrange
+        using var cts = new CancellationTokenSource();
+        var client = new CancelAfterFirstChunkClient(cts);
+
+        // Act & Assert
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await StreamingChatHelper.StreamResponseAsync(
+                client,
+                [new ChatMessage(ChatRole.User, "Hi")],
+                stageName: "CancelTest",
+                cancellationToken: cts.Token));
     }
 
     [Fact]
@@ -248,5 +326,27 @@ public class StreamingChatHelperTests
         var client = new StreamingMockChatClient(["ok"]);
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             StreamingChatHelper.StreamResponseAsync(client, null!, "Test"));
+    }
+
+    private sealed class CancelAfterFirstChunkClient(CancellationTokenSource cts) : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("CancelMidStream");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "first ");
+            cts.Cancel();
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "second");
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 }

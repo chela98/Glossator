@@ -4,12 +4,15 @@ using Glossator.Cli.Infrastructure;
 using Glossator.Core.Models.Epub;
 using Xunit;
 
+[Collection("GlobalDiagnosticsAndConsole")]
 public class RecentBooksManagerTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly string? _originalGlossatorHome;
 
     public RecentBooksManagerTests()
     {
+        _originalGlossatorHome = Environment.GetEnvironmentVariable("GLOSSATOR_HOME");
         _tempDir = Path.Combine(Path.GetTempPath(), $"recent_books_test_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
     }
@@ -98,7 +101,7 @@ public class RecentBooksManagerTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("GLOSSATOR_HOME", null);
+            Environment.SetEnvironmentVariable("GLOSSATOR_HOME", _originalGlossatorHome);
         }
     }
 
@@ -129,12 +132,75 @@ public class RecentBooksManagerTests : IDisposable
         }
         finally
         {
-            Environment.SetEnvironmentVariable("GLOSSATOR_HOME", null);
+            Environment.SetEnvironmentVariable("GLOSSATOR_HOME", _originalGlossatorHome);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterOrUpdateAsync_ExcludesNonBodyRolesDeduplicatesAndCapsHistoryAtTen()
+    {
+        // Arrange
+        Environment.SetEnvironmentVariable("GLOSSATOR_HOME", _tempDir);
+        try
+        {
+            var opfDir = Path.Combine(_tempDir, "book_reg");
+            Directory.CreateDirectory(opfDir);
+            File.WriteAllText(Path.Combine(opfDir, "ch01_tr.xhtml"), "<html></html>");
+            File.WriteAllText(Path.Combine(opfDir, "ch01_tr.xhtml.done"), "OK");
+
+            var package = new EpubPackage
+            {
+                Title = "Primary Book",
+                Author = "Author A",
+                OpfDirectory = opfDir,
+                Spine =
+                [
+                    new EpubItem { Id = "cov", Href = "cover.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Cover },
+                    new EpubItem { Id = "nav", Href = "nav.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Navigation },
+                    new EpubItem { Id = "idx", Href = "ix01.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Index },
+                    new EpubItem { Id = "ch1", Href = "ch01.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter },
+                    new EpubItem { Id = "ch2", Href = "ch02.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter }
+                ]
+            };
+
+            var targetBookPath = Path.Combine(_tempDir, "primary.epub");
+
+            // 11 farklı kitap ekle (sonra primary'yi tekrar ekle -> tekilleşmeli ve 10 ile sınırlanmalı)
+            for (int i = 1; i <= 11; i++)
+            {
+                var otherPkg = new EpubPackage
+                {
+                    Title = $"Book {i}",
+                    OpfDirectory = _tempDir,
+                    Spine = [new EpubItem { Id = "ch1", Href = $"b{i}_ch1.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter }]
+                };
+                await RecentBooksManager.RegisterOrUpdateAsync(Path.Combine(_tempDir, $"book_{i}.epub"), otherPkg);
+            }
+
+            // Act
+            var entry = await RecentBooksManager.RegisterOrUpdateAsync(targetBookPath, package);
+            await RecentBooksManager.RegisterOrUpdateAsync(targetBookPath, package); // Duplicate refresh
+            var history = await RecentBooksManager.LoadRecentBooksAsync();
+
+            // Assert
+            Assert.Equal(2, entry.TotalChapters);
+            Assert.Equal(1, entry.TranslatedChapters);
+            Assert.Equal(50.0, entry.ProgressPercentage);
+            Assert.Equal(10, history.Count);
+            Assert.Equal("Primary Book", history[0].Title);
+            Assert.Equal(1, history.Count(b => b.Path.Equals(Path.GetFullPath(targetBookPath), StringComparison.OrdinalIgnoreCase)));
+            Assert.DoesNotContain(history, b => b.Title == "Book 1");
+            Assert.DoesNotContain(history, b => b.Title == "Book 2");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GLOSSATOR_HOME", _originalGlossatorHome);
         }
     }
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable("GLOSSATOR_HOME", _originalGlossatorHome);
         try
         {
             if (Directory.Exists(_tempDir))

@@ -50,13 +50,22 @@ public class DynamicProviderResolutionTests
         var transClient = provider.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyTranslator);
         var revClient = provider.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyReviewer);
 
-        Assert.NotNull(styleClient);
-        Assert.NotNull(transClient);
-        Assert.NotNull(revClient);
+        var styleMeta = styleClient.GetService<ChatClientMetadata>();
+        var transMeta = transClient.GetService<ChatClientMetadata>();
+        var revMeta = revClient.GetService<ChatClientMetadata>();
+
+        Assert.NotNull(styleMeta);
+        Assert.NotNull(transMeta);
+        Assert.NotNull(revMeta);
+        // Evren anahtarı placeholder ("YOUR_EVREN_API_KEY") olduğu için tüm ajanlar Custom sağlayıcısına ve gpt-4o modeline çözümlenmeli
+        Assert.Equal("gpt-4o", styleMeta.DefaultModelId);
+        Assert.Equal("gpt-4o", transMeta.DefaultModelId);
+        Assert.Equal("gpt-4o", revMeta.DefaultModelId);
+        Assert.Equal(new Uri("https://api.openai.com/v1"), styleMeta.ProviderUri);
     }
 
     [Fact]
-    public void AddGlossatorAiClients_WhenApiKeyUpdatedInOptions_TransientClientsReceiveUpdatedConfiguration()
+    public void AddGlossatorAiClients_WhenOptionsMutatedAtRuntime_TransientClientsReflectNewModelAndEndpoint()
     {
         var services = new ServiceCollection();
         var aiOptions = new GlossatorAiOptions
@@ -83,17 +92,23 @@ public class DynamicProviderResolutionTests
 
         var sp = services.BuildServiceProvider();
 
-        // 1. Initial resolution succeeds
+        // 1. Initial resolution reflects initial configuration
         var client1 = sp.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyStyleAnalyst);
-        Assert.NotNull(client1);
+        var meta1 = client1.GetService<ChatClientMetadata>();
+        Assert.Equal("gpt-4o", meta1?.DefaultModelId);
+        Assert.Equal(new Uri("https://api.openai.com/v1"), meta1?.ProviderUri);
 
-        // 2. Dynamic in-memory key update (e.g. after user fixes 401 Unauthorized)
+        // 2. Runtime update of API key, model and endpoint
         aiOptions.Providers["OpenAI"].ApiKey = "sk-valid-recovered-key-999";
+        aiOptions.Providers["OpenAI"].Endpoint = "https://custom-proxy.example.com/v1";
+        aiOptions.Agents["StyleAnalyst"].ModelId = "gpt-4o-mini";
 
-        // 3. Next resolution creates a fresh transient client instance reflecting the runtime change
+        // 3. Next resolution creates a transient instance carrying the updated configuration
         var client2 = sp.GetRequiredKeyedService<IChatClient>(AiServiceExtensions.KeyStyleAnalyst);
-        Assert.NotNull(client2);
-        Assert.NotSame(client1, client2); // Proves transient lifecycle prevents stale singleton credential pinning
+        var meta2 = client2.GetService<ChatClientMetadata>();
+        Assert.NotSame(client1, client2);
+        Assert.Equal("gpt-4o-mini", meta2?.DefaultModelId);
+        Assert.Equal(new Uri("https://custom-proxy.example.com/v1"), meta2?.ProviderUri);
     }
 
     [Fact]
@@ -243,5 +258,101 @@ public class DynamicProviderResolutionTests
         var (provName, provConfig, modelId) = aiOptions.ResolveAgent("Translator");
         Assert.Equal("Evren", provName);
         Assert.NotNull(provConfig);
+        Assert.Equal("gpt-4o", modelId);
+    }
+
+    [Fact]
+    public void ResolveAgent_WhenAgentAssignedToKeylessLocalProvider_ResolvesLocalProviderAndModel()
+    {
+        var aiOptions = new GlossatorAiOptions
+        {
+            ActiveProvider = "OpenAI",
+            Providers =
+            {
+                ["OpenAI"] = new()
+                {
+                    Endpoint = "https://api.openai.com/v1",
+                    ApiKey = "sk-openai-key",
+                    DefaultModel = "gpt-4o"
+                },
+                ["Ollama"] = new()
+                {
+                    Endpoint = "http://LOCALHOST:11434/v1",
+                    ApiKey = "",
+                    DefaultModel = "llama3.2"
+                }
+            },
+            Agents =
+            {
+                ["Translator"] = new() { Provider = "Ollama", ModelId = "deepseek-r1:14b" }
+            }
+        };
+
+        var (provName, provConfig, modelId) = aiOptions.ResolveAgent("Translator");
+        Assert.Equal("Ollama", provName);
+        Assert.Equal("deepseek-r1:14b", modelId);
+        Assert.Equal("http://LOCALHOST:11434/v1", provConfig.Endpoint);
+    }
+
+    [Theory]
+    [InlineData("gemini-2.0-flash-lite", 0.075, 0.30)]
+    [InlineData("gemini-2.5-flash-lite", 0.10, 0.40)]
+    [InlineData("gemini-3.1-flash-lite", 0.25, 1.50)]
+    [InlineData("gemini-2.5-pro", 1.25, 10.00)]
+    [InlineData("gemini-3-pro-preview", 2.00, 12.00)]
+    [InlineData("gemini-1.5-flash", 0.075, 0.30)]
+    [InlineData("gemini-2.0-flash", 0.10, 0.40)]
+    [InlineData("gemini-2.5-flash", 0.30, 2.50)]
+    [InlineData("gemini-3-flash", 0.50, 3.00)]
+    public void GetGeminiModelRatesPerMillionUsd_ReturnsExpectedRatesByFamilyAndGeneration(
+        string modelId,
+        double expectedInputUsd,
+        double expectedOutputUsd)
+    {
+        // Act
+        var (inputUsd, outputUsd) = GlossatorAiOptions.GetGeminiModelRatesPerMillionUsd(modelId);
+
+        // Assert
+        Assert.Equal(expectedInputUsd, inputUsd);
+        Assert.Equal(expectedOutputUsd, outputUsd);
+    }
+
+    [Theory]
+    [InlineData("StyleAnalyst", "Evren", "https://evren-llmapi.ssyz.org.tr/v1", "deepseek-v4.1-flash", 0.0, 0.0, true)]
+    [InlineData("Reviewer", "Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-pro", 1.25, 10.00, false)]
+    [InlineData("Translator", "CustomProxy", "https://proxy.example.com/v1", "gemini-2.5-flash", 0.30, 2.50, false)]
+    public void ResolveStagePricing_DeterminesFreeVsGeminiPricingAccurately(
+        string stageName,
+        string providerName,
+        string endpoint,
+        string modelId,
+        double expectedInputRate,
+        double expectedOutputRate,
+        bool expectedIsFree)
+    {
+        // Arrange
+        var agentKey = stageName.StartsWith("Style") ? "StyleAnalyst" : stageName.StartsWith("Review") ? "Reviewer" : "Translator";
+        var options = new GlossatorAiOptions
+        {
+            ActiveProvider = providerName,
+            Providers =
+            {
+                [providerName] = new() { Endpoint = endpoint, ApiKey = "sk-test-real-key", DefaultModel = modelId }
+            },
+            Agents =
+            {
+                [agentKey] = new() { Provider = providerName, ModelId = modelId }
+            }
+        };
+
+        // Act
+        var pricing = options.ResolveStagePricing(stageName);
+
+        // Assert
+        Assert.Equal(providerName, pricing.ProviderName);
+        Assert.Equal(modelId, pricing.ModelId);
+        Assert.Equal(expectedInputRate, pricing.InputRatePerMillionUsd);
+        Assert.Equal(expectedOutputRate, pricing.OutputRatePerMillionUsd);
+        Assert.Equal(expectedIsFree, pricing.IsFree);
     }
 }

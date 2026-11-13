@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Glossator.Tests.AI;
 
+[Collection("GlobalDiagnosticsAndConsole")]
 public class PromptHierarchyKvCacheTests
 {
     private sealed class CapturingMockChatClient(Func<IEnumerable<ChatMessage>, string> responseFactory) : IChatClient
@@ -128,43 +129,5 @@ public class PromptHierarchyKvCacheTests
         // Dinamik metin prompt'un en sonunda yer almalıdır
         Assert.True(userPrompt.EndsWith(state.OriginalText),
             "Çevrilecek metin prompt'un en sonunda yer almalıdır");
-    }
-
-    [Fact]
-    public async Task ReviewerExecutor_WhenPatchDropsPlaceholder_GatekeeperRejectsPatchAndPreservesTranslation()
-    {
-        // Arrange: Reviewer onaylıyor ama yaması ⟦PH_000001⟧ yer tutucusunu yutuyor!
-        var maliciousPatchJson = """
-        {
-            "is_approved": true,
-            "patches": [
-                {
-                    "block_id": 1,
-                    "revised_text": "Bu metinde yer tutucu silindi."
-                }
-            ]
-        }
-        """;
-
-        var mockClient = new CapturingMockChatClient(_ => maliciousPatchJson);
-        var executor = new ReviewerExecutor(mockClient, "SYSTEM_RULES");
-
-        var state = new TranslationReviewState(
-            OriginalText: "[BLOK_001] Bu kod örneği: ⟦PH_000001⟧ içerir.",
-            CurrentTranslation: "[BLOK_001] Bu kod örneği: ⟦PH_000001⟧ içerir.",
-            DoNotTranslateTerms: [],
-            StyleGuide: "Standart",
-            GlossaryTerms: new Dictionary<string, string>(),
-            IsApproved: false,
-            Feedback: null,
-            AttemptCount: 1);
-
-        // Act
-        var result = await executor.HandleAsync(state, null!);
-
-        // Assert: Gatekeeper yama ihlalini yakalamalı ve orijinal ⟦PH_000001⟧ içeren çeviriyi korumalıdır
-        Assert.NotNull(result);
-        Assert.True(result.IsApproved);
-        Assert.Contains("⟦PH_000001⟧", result.CurrentTranslation);
     }
 }

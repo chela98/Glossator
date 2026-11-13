@@ -19,6 +19,7 @@ public static class EpubGlossaryReader
         var document = Parser.ParseDocument(htmlContent);
 
         var entries = new List<GlossaryEntry>();
+        var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var dtElements = document.QuerySelectorAll("dt").ToList();
 
         if (dtElements.Count > 0)
@@ -36,12 +37,15 @@ public static class EpubGlossaryReader
                     definition = dd.TextContent.Trim();
                 }
 
-                entries.Add(new GlossaryEntry
+                if (seenKeys.Add(termText))
                 {
-                    EnglishTerm = termText,
-                    EnglishDefinition = definition,
-                    Policy = GlossingPolicy.ProgressiveGloss
-                });
+                    entries.Add(new GlossaryEntry
+                    {
+                        EnglishTerm = termText,
+                        EnglishDefinition = definition,
+                        Policy = GlossingPolicy.ProgressiveGloss
+                    });
+                }
             }
         }
         else
@@ -58,12 +62,15 @@ public static class EpubGlossaryReader
                 var defEl = el.QuerySelector("p:not(:has(strong)), span.definition");
                 var def = defEl?.TextContent.Trim();
 
-                entries.Add(new GlossaryEntry
+                if (seenKeys.Add(termText))
                 {
-                    EnglishTerm = termText,
-                    EnglishDefinition = def,
-                    Policy = GlossingPolicy.ProgressiveGloss
-                });
+                    entries.Add(new GlossaryEntry
+                    {
+                        EnglishTerm = termText,
+                        EnglishDefinition = def,
+                        Policy = GlossingPolicy.ProgressiveGloss
+                    });
+                }
             }
         }
 

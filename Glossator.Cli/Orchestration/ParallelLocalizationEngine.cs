@@ -9,6 +9,8 @@ using Glossator.Core.Models.Epub;
 using Glossator.Core.Packaging;
 using Glossator.Core.Parsing;
 using Glossator.Core.Rules;
+using Glossator.Core.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -220,9 +222,7 @@ public sealed class ParallelLocalizationEngine(
                             // Segmentleri kuyruk üzerinden arka plan SQLite yazıcısına aktar
                             foreach (var seg in sec.Segments)
                             {
-                                var isTranslated = !string.IsNullOrWhiteSpace(seg.TranslatedText) &&
-                                                   (seg.IsPureTechnicalOrPlaceholder() ||
-                                                    !string.Equals(seg.TranslatedText.Trim(), seg.MaskedText.Trim(), StringComparison.OrdinalIgnoreCase));
+                                var isTranslated = seg.IsTranslationComplete(package.Title, package.Author);
 
                                 await checkpointStore.EnqueueAsync(new SegmentCheckpoint
                                 {
@@ -251,11 +251,8 @@ public sealed class ParallelLocalizationEngine(
                     await File.WriteAllTextAsync(outputFilePath, document.ToStrictXhtml(), ct);
 
                     // KONTROL: Bölümdeki tüm segmentler eksiksiz çevrildi mi? (İngilizce kalan veya boş olan var mı?)
-                    // Saf yer tutucu/teknik bloklarda Translated == Masked olması normaldir; doğal dil içeren bloklar denetlenir.
-                    var untranslatedCount = segments.Count(s =>
-                        string.IsNullOrWhiteSpace(s.TranslatedText) ||
-                        (!s.IsPureTechnicalOrPlaceholder() &&
-                         string.Equals(s.TranslatedText.Trim(), s.MaskedText.Trim(), StringComparison.OrdinalIgnoreCase)));
+                    // Saf yer tutucu/teknik bloklar, adres/kurum bilgileri, e-posta ve kitap adı dışındaki doğal dil blokları denetlenir.
+                    var untranslatedCount = segments.Count(s => !s.IsTranslationComplete(package.Title, package.Author));
 
                     if (untranslatedCount == 0)
                     {
@@ -314,25 +311,63 @@ public sealed class ParallelLocalizationEngine(
         finally
         {
             sessionStopwatch.Stop();
-            var aiOpts = rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<Glossator.AI.Configuration.GlossatorAiOptions>>()?.Value;
-            RenderSessionReport(sessionStopwatch.Elapsed, aiOpts);
+            var snapshot = GlossatorDiagnostics.GetStageStatsSnapshot();
+            if (snapshot.Count > 0 || GlossatorDiagnostics.SessionSectionsCompleted > 0)
+            {
+                var aiOpts = rootServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<Glossator.AI.Configuration.GlossatorAiOptions>>()?.Value;
+                var rateQuote = await ResolveSessionExchangeRateAsync(rootServiceProvider);
+                RenderSessionReport(sessionStopwatch.Elapsed, aiOpts, rateQuote, snapshot);
+            }
         }
     }
 
-    private static void RenderSessionReport(TimeSpan elapsed, Glossator.AI.Configuration.GlossatorAiOptions? aiOptions)
+    private static async Task<ExchangeRateQuote> ResolveSessionExchangeRateAsync(IServiceProvider sp)
     {
-        var snapshot = GlossatorDiagnostics.GetStageStatsSnapshot();
-        if (snapshot.Count == 0 && GlossatorDiagnostics.SessionSectionsCompleted == 0)
+        double? configuredFallback = null;
+        var config = sp.GetService<IConfiguration>();
+        if (double.TryParse(
+                config?["Studio:UsdToTryRate"],
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var parsedConfig) &&
+            double.IsFinite(parsedConfig) && parsedConfig > 0)
         {
-            return;
+            configuredFallback = parsedConfig;
         }
 
-        const double usdToTry = 38.00;
+        var exchangeRateService = sp.GetService<IExchangeRateService>();
+        if (exchangeRateService != null)
+        {
+            try
+            {
+                return await exchangeRateService.GetUsdToTryRateAsync(
+                    fallbackRate: configuredFallback,
+                    cancellationToken: CancellationToken.None);
+            }
+            catch
+            {
+                // Maliyet karnesi canlı kur servisi hatası yüzünden yarıda kalmamalı
+            }
+        }
+
+        var fallback = ExchangeRateService.ResolveValidFallback(configuredFallback);
+        return new ExchangeRateQuote(fallback, "Yerel Yedek", IsLive: false, DateTimeOffset.UtcNow);
+    }
+
+    private static void RenderSessionReport(
+        TimeSpan elapsed,
+        Glossator.AI.Configuration.GlossatorAiOptions? aiOptions,
+        ExchangeRateQuote rateQuote,
+        IReadOnlyDictionary<string, StageUsageStats> snapshot)
+    {
+        var usdToTry = rateQuote.Rate;
+        var rateStatusText = rateQuote.IsLive ? "Canlı API" : "Yedek Kur";
 
         var table = new Table()
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Cyan1)
             .Title("[bold yellow]ÇEVİRİ SONU TOKEN VE MALİYET KARNESİ[/]")
+            .Caption($"[dim]Kur: 1 USD = {usdToTry:F4} ₺ ({Markup.Escape(rateQuote.Source)} - {rateStatusText})[/]")
             .AddColumn(new TableColumn("[bold white]Ajan / Model[/]"))
             .AddColumn(new TableColumn("[bold cyan]Çağrı[/]").RightAligned())
             .AddColumn(new TableColumn("[bold green]Girdi (Input)[/]").RightAligned())

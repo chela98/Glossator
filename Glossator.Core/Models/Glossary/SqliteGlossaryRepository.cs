@@ -292,6 +292,44 @@ public class SqliteGlossaryRepository
     }
 
     /// <summary>
+    /// Kullanıcı arayüzünden yapılan açık düzenlemeleri kaydeder; onay kaldırma (IsReviewed = false),
+    /// alan temizleme (null) ve taslak terimde ilke değişikliğine doğrudan izin verir.
+    /// </summary>
+    public async Task<int> UpdateTermManualAsync(GlossaryEntry entry, CancellationToken ct = default)
+    {
+        if (entry.Id <= 0)
+        {
+            return await AddOrUpdateTermAsync(entry, ct);
+        }
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+
+        var now = DateTime.UtcNow.ToString("o");
+        var sql = """
+            UPDATE Terms SET
+                TurkishTerm = @TurkishTerm,
+                EnglishDefinition = @EnglishDefinition,
+                Policy = @Policy,
+                IsReviewed = @IsReviewed,
+                SourceBook = @SourceBook,
+                UpdatedAt = @Now
+            WHERE Id = @Id;
+            """;
+
+        await using var cmd = new SqliteCommand(sql, connection);
+        cmd.Parameters.AddWithValue("@Id", entry.Id);
+        cmd.Parameters.AddWithValue("@TurkishTerm", string.IsNullOrWhiteSpace(entry.TurkishTerm) ? DBNull.Value : entry.TurkishTerm.Trim());
+        cmd.Parameters.AddWithValue("@EnglishDefinition", string.IsNullOrWhiteSpace(entry.EnglishDefinition) ? DBNull.Value : entry.EnglishDefinition.Trim());
+        cmd.Parameters.AddWithValue("@Policy", (int)entry.Policy);
+        cmd.Parameters.AddWithValue("@IsReviewed", entry.IsReviewed ? 1 : 0);
+        cmd.Parameters.AddWithValue("@SourceBook", string.IsNullOrWhiteSpace(entry.SourceBook) ? DBNull.Value : entry.SourceBook.Trim());
+        cmd.Parameters.AddWithValue("@Now", now);
+
+        var affected = await cmd.ExecuteNonQueryAsync(ct);
+        return affected > 0 ? affected : await AddOrUpdateTermAsync(entry, ct);
+    }
+
+    /// <summary>
     /// Birden fazla terimi tek bir işlem (transaction) içinde ekler veya günceller (Yüksek performanslı toplu içe aktarma).
     /// </summary>
     public async Task<int> AddOrUpdateTermsBatchAsync(IEnumerable<GlossaryEntry> entries, CancellationToken ct = default)
@@ -439,5 +477,66 @@ public class SqliteGlossaryRepository
 
         var affected = await cmd.ExecuteNonQueryAsync(ct);
         return affected > 0;
+    }
+
+    /// <summary>
+    /// Birden fazla seçili terimin onay ve/veya ilke bilgisini tek transaction'da topluca günceller.
+    /// </summary>
+    public async Task<int> BatchUpdateManualAsync(
+        IEnumerable<int> ids,
+        bool? isReviewed = null,
+        GlossingPolicy? policy = null,
+        CancellationToken ct = default)
+    {
+        var idList = ids.Where(id => id > 0).Distinct().ToList();
+        if (idList.Count == 0 || (!isReviewed.HasValue && !policy.HasValue)) return 0;
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+
+        var setClauses = new List<string> { "UpdatedAt = @Now" };
+        if (isReviewed.HasValue) setClauses.Add("IsReviewed = @IsReviewed");
+        if (policy.HasValue) setClauses.Add("Policy = @Policy");
+
+        var now = DateTime.UtcNow.ToString("o");
+        var sql = $"UPDATE Terms SET {string.Join(", ", setClauses)} WHERE Id = @Id;";
+
+        var affected = 0;
+        foreach (var id in idList)
+        {
+            await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+            cmd.Parameters.AddWithValue("@Id", id);
+            cmd.Parameters.AddWithValue("@Now", now);
+            if (isReviewed.HasValue) cmd.Parameters.AddWithValue("@IsReviewed", isReviewed.Value ? 1 : 0);
+            if (policy.HasValue) cmd.Parameters.AddWithValue("@Policy", (int)policy.Value);
+            affected += await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return affected;
+    }
+
+    /// <summary>
+    /// Birden fazla seçili terimi tek transaction içinde kalıcı olarak siler.
+    /// </summary>
+    public async Task<int> DeleteTermsBatchAsync(IEnumerable<int> ids, CancellationToken ct = default)
+    {
+        var idList = ids.Where(id => id > 0).Distinct().ToList();
+        if (idList.Count == 0) return 0;
+
+        await using var connection = await _connectionFactory.CreateOpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+
+        const string sql = "DELETE FROM Terms WHERE Id = @Id;";
+        var deleted = 0;
+        foreach (var id in idList)
+        {
+            await using var cmd = new SqliteCommand(sql, connection, (SqliteTransaction)transaction);
+            cmd.Parameters.AddWithValue("@Id", id);
+            deleted += await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        await transaction.CommitAsync(ct);
+        return deleted;
     }
 }

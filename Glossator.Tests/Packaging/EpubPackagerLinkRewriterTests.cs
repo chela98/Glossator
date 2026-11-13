@@ -7,100 +7,33 @@ namespace Glossator.Tests.Packaging;
 
 public class EpubPackagerLinkRewriterTests
 {
-    [Fact]
-    public void RewriteHref_SameDirectoryLink_RewritesToTranslatedFile()
+    [Theory]
+    [InlineData("ch02.xhtml", "ch01.xhtml", "ch02.xhtml", "ch02_tr.xhtml", "ch02_tr.xhtml")]
+    [InlineData("ch02.xhtml#section-1", "ch01.xhtml", "ch02.xhtml", "ch02_tr.xhtml", "ch02_tr.xhtml#section-1")]
+    [InlineData("../notes.xhtml#fn1", "text/ch01.xhtml", "notes.xhtml", "notes_tr.xhtml", "../notes_tr.xhtml#fn1")]
+    [InlineData("#local-footnote-1", "ch01.xhtml", "ch01.xhtml", "ch01_tr.xhtml", "#local-footnote-1")]
+    [InlineData("https://example.com/ch02.xhtml", "ch01.xhtml", "ch02.xhtml", "ch02_tr.xhtml", "https://example.com/ch02.xhtml")]
+    [InlineData("cover.xhtml#top", "ch01.xhtml", "ch02.xhtml", "ch02_tr.xhtml", "cover.xhtml#top")]
+    [InlineData("ch01.xhtml#sec1", "text/toc.xhtml", "text/ch01.xhtml", "text/ch01_tr.xhtml", "ch01_tr.xhtml#sec1")]
+    [InlineData("../text/ch01.xhtml#intro", "nav/toc.xhtml", "text/ch01.xhtml", "text/ch01_tr.xhtml", "../text/ch01_tr.xhtml#intro")]
+    public void RewriteHref_ResolvesRelativeAndUntranslatedPathsCorrectly(
+        string originalHref,
+        string currentDocHref,
+        string mapKey,
+        string mapValue,
+        string expectedHref)
     {
         // Arrange
         var translationMap = new Dictionary<string, string>
         {
-            ["ch02.xhtml"] = "ch02_tr.xhtml"
+            [mapKey] = mapValue
         };
 
         // Act
-        var rewritten = EpubPackager.RewriteHref("ch02.xhtml", "ch01.xhtml", translationMap);
+        var rewritten = EpubPackager.RewriteHref(originalHref, currentDocHref, translationMap);
 
         // Assert
-        Assert.Equal("ch02_tr.xhtml", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_WithAnchor_PreservesAnchorOnTranslatedFile()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["ch02.xhtml"] = "ch02_tr.xhtml"
-        };
-
-        // Act
-        var rewritten = EpubPackager.RewriteHref("ch02.xhtml#section-1", "ch01.xhtml", translationMap);
-
-        // Assert
-        Assert.Equal("ch02_tr.xhtml#section-1", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_RelativeParentDirectory_RewritesCorrectly()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["notes.xhtml"] = "notes_tr.xhtml"
-        };
-
-        // Act: text/ch01.xhtml içinden ../notes.xhtml linki
-        var rewritten = EpubPackager.RewriteHref("../notes.xhtml#fn1", "text/ch01.xhtml", translationMap);
-
-        // Assert
-        Assert.Equal("../notes_tr.xhtml#fn1", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_IntraPageAnchor_LeavesUntouched()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["ch01.xhtml"] = "ch01_tr.xhtml"
-        };
-
-        // Act
-        var rewritten = EpubPackager.RewriteHref("#local-footnote-1", "ch01.xhtml", translationMap);
-
-        // Assert
-        Assert.Equal("#local-footnote-1", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_ExternalUrl_LeavesUntouched()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["ch02.xhtml"] = "ch02_tr.xhtml"
-        };
-
-        // Act
-        var rewritten = EpubPackager.RewriteHref("https://example.com/ch02.xhtml", "ch01.xhtml", translationMap);
-
-        // Assert
-        Assert.Equal("https://example.com/ch02.xhtml", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_UntranslatedDocument_LeavesUntouched()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["ch02.xhtml"] = "ch02_tr.xhtml"
-        };
-
-        // Act: cover.xhtml çevrilmemiş
-        var rewritten = EpubPackager.RewriteHref("cover.xhtml#top", "ch01.xhtml", translationMap);
-
-        // Assert
-        Assert.Equal("cover.xhtml#top", rewritten);
+        Assert.Equal(expectedHref, rewritten);
     }
 
     [Fact]
@@ -171,6 +104,46 @@ public class EpubPackagerLinkRewriterTests
             Assert.Equal("ch01_tr.html", discovered["ch01.xhtml"]);
             Assert.True(discovered.ContainsKey("ch02.html"));
             Assert.Equal("ch02_tr.html", discovered["ch02.html"]);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DiscoverTranslations_SkipsPartialWithoutDoneMarker_IncludesDone()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "GlossatorPartialTest_" + System.Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            // ch01 yalnızca .part içeriyor -> paketlenmemeli
+            File.WriteAllText(Path.Combine(tempDir, "ch01_tr.xhtml"), "partial");
+            File.WriteAllText(Path.Combine(tempDir, "ch01_tr.xhtml.part"), "partial");
+
+            // ch02 hem .done hem artık .part içeriyor -> tamamlanmış sayılmalı
+            File.WriteAllText(Path.Combine(tempDir, "ch02_tr.xhtml"), "complete");
+            File.WriteAllText(Path.Combine(tempDir, "ch02_tr.xhtml.done"), "2026-01-01");
+            File.WriteAllText(Path.Combine(tempDir, "ch02_tr.xhtml.part"), "stale");
+
+            var package = new EpubPackage
+            {
+                Title = "Test Book",
+                OpfDirectory = tempDir,
+                Manifest = new Dictionary<string, EpubItem>
+                {
+                    ["ch01"] = new() { Id = "ch01", Href = "ch01.xhtml", MediaType = "application/xhtml+xml" },
+                    ["ch02"] = new() { Id = "ch02", Href = "ch02.xhtml", MediaType = "application/xhtml+xml" }
+                }
+            };
+
+            var discovered = EpubPackager.DiscoverTranslations(package);
+
+            Assert.Single(discovered);
+            Assert.False(discovered.ContainsKey("ch01.xhtml"));
+            Assert.True(discovered.ContainsKey("ch02.xhtml"));
         }
         finally
         {
@@ -365,36 +338,5 @@ public class EpubPackagerLinkRewriterTests
                 try { Directory.Delete(tempDir, true); } catch { }
             }
         }
-    }
-    [Fact]
-    public void RewriteHref_FromSubfolderNav_CalculatesRelativePathCorrectly()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["text/ch01.xhtml"] = "text/ch01_tr.xhtml"
-        };
-
-        // Act: text/toc.xhtml iÃ§inden aynÄ± klasÃ¶rdeki ch01.xhtml linki
-        var rewritten = EpubPackager.RewriteHref("ch01.xhtml#sec1", "text/toc.xhtml", translationMap);
-
-        // Assert: alt klasÃ¶r iÃ§inde olduÄŸu iÃ§in ch01_tr.xhtml#sec1 olmalÄ±
-        Assert.Equal("ch01_tr.xhtml#sec1", rewritten);
-    }
-
-    [Fact]
-    public void RewriteHref_FromNavInSubfolder_ToAnotherSubfolder_CalculatesRelativeDepth()
-    {
-        // Arrange
-        var translationMap = new Dictionary<string, string>
-        {
-            ["text/ch01.xhtml"] = "text/ch01_tr.xhtml"
-        };
-
-        // Act: nav/toc.xhtml iÃ§inden ../text/ch01.xhtml linki
-        var rewritten = EpubPackager.RewriteHref("../text/ch01.xhtml#intro", "nav/toc.xhtml", translationMap);
-
-        // Assert: gÃ¶reli yol ../text/ch01_tr.xhtml#intro olarak hesaplanmalÄ±
-        Assert.Equal("../text/ch01_tr.xhtml#intro", rewritten);
     }
 }

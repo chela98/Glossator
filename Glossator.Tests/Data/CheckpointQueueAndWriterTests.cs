@@ -235,12 +235,16 @@ public class CheckpointStoreTests : IDisposable
     [Fact]
     public void SegmentCheckpoint_ComputeHash_MatchesExpectedSha256()
     {
-        var text = "Hello World";
+        // Arrange
+        const string text = "Hello World";
+        const string expectedSha256 = "A591A6D40BF420404A011733CFB7B190D62C65BF0BCDA32B57B277D9AD9F146E";
+
+        // Act
         var hash = SegmentCheckpoint.ComputeHash(text);
 
-        Assert.False(string.IsNullOrWhiteSpace(hash));
-        Assert.Equal(64, hash.Length); // 256 bits = 64 hex chars
-        Assert.Equal(hash, SegmentCheckpoint.ComputeHash(text)); // Deterministik
+        // Assert
+        Assert.Equal(expectedSha256, hash);
+        Assert.Equal(hash, SegmentCheckpoint.ComputeHash(text));
     }
 
     public void Dispose()
@@ -268,8 +272,9 @@ public class CheckpointStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task CheckpointStore_FlushAsync_WhenPersistenceFails_ThrowsException()
+    public async Task CheckpointStore_FlushAsync_WhenPersistenceFails_ThrowsInvalidOperationException()
     {
+        // Arrange
         var faultyFactory = new FaultyConnectionFactory();
         await using var store = new CheckpointStore(faultyFactory, capacity: 50);
 
@@ -287,7 +292,31 @@ public class CheckpointStoreTests : IDisposable
 
         await store.EnqueueAsync(cp);
 
-        // Act & Assert: Persistence baÅŸarÄ±sÄ±z olduÄŸunda FlushAsync istisna fÄ±rlatmalÄ±, sahte baÅŸarÄ± Ã¼retmemeli
-        await Assert.ThrowsAnyAsync<Exception>(async () => await store.FlushAsync());
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await store.FlushAsync());
+        Assert.Equal("Simulated SQLite failure", ex.Message);
+    }
+
+    [Fact]
+    public async Task CheckpointStore_AfterDisposeAsync_EnqueueAndFlushThrowObjectDisposedException()
+    {
+        // Arrange
+        var store = new CheckpointStore(_connectionFactory, capacity: 10);
+        await store.DisposeAsync();
+
+        var cp = new SegmentCheckpoint
+        {
+            BookId = "b",
+            ChapterFile = "c",
+            SegmentIndex = 1,
+            OriginalHash = "h",
+            TagName = "p",
+            OriginalText = "x",
+            TranslatedText = "y"
+        };
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await store.EnqueueAsync(cp));
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await store.FlushAsync());
     }
 }

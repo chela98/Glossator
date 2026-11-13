@@ -20,6 +20,11 @@ public class GlossatorAiOptions
     public Dictionary<string, AiProviderOptions> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, AgentRoleOptions> Agents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    public static bool IsLocalEndpoint(string? endpoint)
+        => !string.IsNullOrWhiteSpace(endpoint)
+           && (endpoint.Contains("localhost", StringComparison.OrdinalIgnoreCase)
+               || endpoint.Contains("127.0.0.1", StringComparison.OrdinalIgnoreCase));
+
     public (string ProviderName, AiProviderOptions Provider, string ModelId) ResolveAgent(string agentRoleKey)
     {
         Agents.TryGetValue(agentRoleKey, out var agentConfig);
@@ -28,11 +33,11 @@ public class GlossatorAiOptions
         string selectedProviderName = string.Empty;
         AiProviderOptions? selectedProvider = null;
 
-        // Ajanın kendi Provider'ı varsa ve ActiveProvider'dan farklıysa VE geçerli bir anahtara sahipse:
+        // Ajanın kendi Provider'ı varsa ve ActiveProvider'dan farklıysa VE kullanılabilir durumdaysa (gerçek key veya localhost):
         if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.Provider)
             && !agentConfig.Provider.Equals(ActiveProvider, StringComparison.OrdinalIgnoreCase)
             && Providers.TryGetValue(agentConfig.Provider, out var specificProv)
-            && !string.IsNullOrWhiteSpace(specificProv.ApiKey) && !specificProv.ApiKey.Contains("YOUR_"))
+            && (IsLocalEndpoint(specificProv.Endpoint) || (!string.IsNullOrWhiteSpace(specificProv.ApiKey) && !specificProv.ApiKey.Contains("YOUR_", StringComparison.OrdinalIgnoreCase))))
         {
             selectedProviderName = agentConfig.Provider;
             selectedProvider = specificProv;
@@ -69,8 +74,16 @@ public class GlossatorAiOptions
             || agentConfig.Provider.Equals(selectedProviderName, StringComparison.OrdinalIgnoreCase));
 
         // Eğer aynı sağlayıcıysa ve agent'ın ModelId'si varsa:
+        // (Yalnızca OpenAI/Gemini resmi sağlayıcılarında varsayılan Evren model sızıntılarını engelle; yerel/özel sağlayıcılarda deepseek/gemma serbesttir)
+        bool isStrictCloudProvider = selectedProviderName.Equals("OpenAI", StringComparison.OrdinalIgnoreCase)
+                                     || selectedProviderName.Equals("Gemini", StringComparison.OrdinalIgnoreCase);
+        bool looksLikeEvrenSpecificModel = agentConfig != null &&
+            (agentConfig.ModelId.StartsWith("deepseek", StringComparison.OrdinalIgnoreCase)
+             || agentConfig.ModelId.StartsWith("gemma", StringComparison.OrdinalIgnoreCase)
+             || agentConfig.ModelId.StartsWith("mimo", StringComparison.OrdinalIgnoreCase));
+
         if (sameProvider && agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ModelId)
-            && !(selectedProviderName != "Evren" && (agentConfig.ModelId.StartsWith("deepseek", StringComparison.OrdinalIgnoreCase) || agentConfig.ModelId.StartsWith("gemma", StringComparison.OrdinalIgnoreCase) || agentConfig.ModelId.StartsWith("mimo", StringComparison.OrdinalIgnoreCase))))
+            && !(isStrictCloudProvider && looksLikeEvrenSpecificModel))
         {
             resolvedModel = agentConfig.ModelId;
         }

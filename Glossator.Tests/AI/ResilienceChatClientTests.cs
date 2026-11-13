@@ -95,15 +95,78 @@ public class ResilienceChatClientTests
         Assert.Equal(1, attemptCount);
     }
 
+    [Theory]
+    [InlineData(System.Net.HttpStatusCode.BadRequest)]
+    [InlineData(System.Net.HttpStatusCode.Unauthorized)]
+    [InlineData(System.Net.HttpStatusCode.Forbidden)]
+    [InlineData(System.Net.HttpStatusCode.NotFound)]
+    [InlineData(System.Net.HttpStatusCode.InternalServerError)]
+    public async Task GetResponseAsync_WhenHttpRequestExceptionHasNonTransientStatusCode_ThrowsWithoutRetries(
+        System.Net.HttpStatusCode statusCode)
+    {
+        // Arrange
+        var attemptCount = 0;
+        var inner = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            throw new HttpRequestException($"HTTP {(int)statusCode}", null, statusCode);
+        });
+
+        var client = new ResilienceChatClient(
+            inner,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello")]));
+
+        Assert.Equal(statusCode, ex.StatusCode);
+        Assert.Equal(1, attemptCount);
+    }
+
     [Fact]
-    public async Task GetResponseAsync_WhenCancelled_ThrowsOperationCanceledException()
+    public async Task GetResponseAsync_WhenHttpRequestExceptionHasNoStatusCode_RetriesSocketFailure()
+    {
+        // Arrange
+        var attemptCount = 0;
+        var inner = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+            {
+                throw new HttpRequestException("Name or service not known");
+            }
+
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Recovered")));
+        });
+
+        var client = new ResilienceChatClient(
+            inner,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        // Act
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello")]);
+
+        // Assert
+        Assert.Equal(2, attemptCount);
+        Assert.Equal("Recovered", response.Text);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenCancelled_ThrowsOperationCanceledExceptionWithoutRetry()
     {
         // Arrange
         using var cts = new CancellationTokenSource();
-        cts.Cancel(); // Zaten iptal edilmiş token
+        cts.Cancel();
+        var attemptCount = 0;
 
         var inner = new MockChatClient((msgs, opts, ct) =>
         {
+            attemptCount++;
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "OK")));
         });
@@ -117,6 +180,7 @@ public class ResilienceChatClientTests
         // Act & Assert
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello")], cancellationToken: cts.Token));
+        Assert.Equal(1, attemptCount);
     }
 
     [Fact]
@@ -179,5 +243,108 @@ public class ResilienceChatClientTests
 
         Assert.Contains("503", ex.Message);
         Assert.Equal(3, attemptCount); // maxRetries = 3 kez denendi ve fırlatıldı
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenTimeoutOrHttp429StatusOccurs_RetriesAndSucceeds()
+    {
+        // Arrange
+        var attemptCount = 0;
+        var inner = new MockChatClient((_, _, _) =>
+        {
+            attemptCount++;
+            if (attemptCount == 1)
+                throw new TimeoutException("Socket read timed out");
+            if (attemptCount == 2)
+                throw new HttpRequestException("Rate limit", null, System.Net.HttpStatusCode.TooManyRequests);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "OK")));
+        });
+
+        var client = new ResilienceChatClient(
+            inner,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(5));
+
+        // Act
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "Ping")]);
+
+        // Assert
+        Assert.Equal(3, attemptCount);
+        Assert.Equal("OK", response.Text);
+    }
+
+    [Fact]
+    public async Task OpenTelemetryPipeline_WithResilienceChatClient_CapturesExactSingleGeminiUsage()
+    {
+        // Arrange
+        var capturedActivities = new List<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name.Contains("Microsoft.Extensions.AI"),
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) =>
+                System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = act => capturedActivities.Add(act)
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+        var inner = new MockStreamingUsageChatClient();
+        var pipeline = inner
+            .AsBuilder()
+            .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = true)
+            .Use(c => new ResilienceChatClient(c, NullLogger<ResilienceChatClient>.Instance))
+            .Build();
+
+        // Act
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in pipeline.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Test")]))
+        {
+            updates.Add(u);
+        }
+
+        // Assert: 3 içerik parçası (UsageContent sıyrılmış) + 1 normalize edilmiş final UsageContent chunk'ı = 4
+        Assert.Equal(4, updates.Count);
+        Assert.All(updates.Take(3), u => Assert.DoesNotContain(u.Contents, c => c is UsageContent));
+        var finalUsage = Assert.IsType<UsageContent>(Assert.Single(updates[3].Contents));
+        Assert.Equal(300L, finalUsage.Details.AdditionalCounts!["OutputTokenDetails.ReasoningTokenCount"]);
+        Assert.NotEmpty(capturedActivities);
+        var otelSpan = capturedActivities.Last();
+        Assert.Equal(1000L, Convert.ToInt64(otelSpan.GetTagItem("gen_ai.usage.input_tokens")));
+        Assert.Equal(450L, Convert.ToInt64(otelSpan.GetTagItem("gen_ai.usage.output_tokens")));
+    }
+
+    private sealed class MockStreamingUsageChatClient : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("MockGemini", new Uri("https://generativelanguage.googleapis.com/v1beta/openai/"), "gemini-2.5-flash");
+        public void Dispose() { }
+        public object? GetService(Type serviceType, object? serviceKey = null) => serviceType.IsInstanceOfType(this) ? this : null;
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            for (int i = 1; i <= 3; i++)
+            {
+                yield return new ChatResponseUpdate
+                {
+                    Role = ChatRole.Assistant,
+                    ModelId = "gemini-2.5-flash",
+                    Contents =
+                    [
+                        new TextContent($"Parça {i} "),
+                        new UsageContent(new UsageDetails
+                        {
+                            InputTokenCount = 1000,
+                            OutputTokenCount = i * 50,
+                            TotalTokenCount = 1000 + (i * 50) + 300
+                        })
+                    ]
+                };
+            }
+        }
     }
 }

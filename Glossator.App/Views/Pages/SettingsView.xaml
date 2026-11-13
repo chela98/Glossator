@@ -1,0 +1,397 @@
+<UserControl x:Class="Glossator.App.Views.Pages.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:Glossator.App.ViewModels">
+    <Grid Margin="24,18,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Üst Başlık ve Segmented Sub-Tab -->
+        <Grid Grid.Row="0" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Ayarlar &amp; Promptlar" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding SettingsDirtyBannerText}"
+                           FontSize="12"
+                           Margin="0,3,0,0"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Segmented Control -->
+            <Border Grid.Column="1"
+                    Background="{DynamicResource StudioCardBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="3"
+                    VerticalAlignment="Center"
+                    Margin="0,0,12,0">
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton Style="{StaticResource SegmentedTabRadioStyle}"
+                                 GroupName="SettingsSubTabGroup"
+                                 Content="Sağlayıcılar &amp; Modeller"
+                                 IsChecked="{Binding SelectedSubTab, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=ProvidersAndAgents}"/>
+                    <RadioButton Style="{StaticResource SegmentedTabRadioStyle}"
+                                 GroupName="SettingsSubTabGroup"
+                                 Content="Prompt Editörü"
+                                 IsChecked="{Binding SelectedSubTab, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Prompts}"/>
+                </StackPanel>
+            </Border>
+
+            <ui:Button Grid.Column="2"
+                       Content="Ayarları Kaydet"
+                       Icon="{ui:SymbolIcon Save24}"
+                       Appearance="Primary"
+                       VerticalAlignment="Center"
+                       Command="{Binding SaveAiSettingsCommand}"
+                       Visibility="{Binding SelectedSubTab, Converter={StaticResource EnumToVisConverter}, ConverterParameter=ProvidersAndAgents}"/>
+        </Grid>
+
+        <!-- ALT SEKME 1: Sağlayıcılar & Ajanlar -->
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      Visibility="{Binding SelectedSubTab, Converter={StaticResource EnumToVisConverter}, ConverterParameter=ProvidersAndAgents}">
+            <StackPanel IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}">
+                <!-- 1. Aktif Sağlayıcı & Profil Düzenleme -->
+                <Border Background="{DynamicResource StudioCardBrush}"
+                        BorderBrush="{DynamicResource StudioBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Padding="18"
+                        Margin="0,0,0,14">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="290"/>
+                            <ColumnDefinition Width="24"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Sol Sütun: Aktif Sağlayıcı & Yeni Ekle -->
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Varsayılan Aktif Sağlayıcı" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <TextBlock Text="Özel atanmamış tüm ajanlar bu sağlayıcıyı kullanır."
+                                       FontSize="11.5"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       Margin="0,0,0,8"/>
+
+                            <ComboBox ItemsSource="{Binding ProviderNames}"
+                                      SelectedItem="{Binding SelectedActiveProvider, Mode=TwoWay}"
+                                      Margin="0,0,0,18"/>
+
+                            <TextBlock Text="Yeni Sağlayıcı Profili Ekle" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox PlaceholderText="Ör: Ollama, Groq..."
+                                            Text="{Binding NewProviderName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <ui:Button Grid.Column="1"
+                                           Content="Ekle"
+                                           Margin="6,0,0,0"
+                                           Appearance="Secondary"
+                                           Command="{Binding AddProviderCommand}"/>
+                            </Grid>
+                        </StackPanel>
+
+                        <!-- Ayırıcı -->
+                        <Border Grid.Column="1" Width="1" Background="{DynamicResource StudioBorderBrush}" HorizontalAlignment="Center"/>
+
+                        <!-- Sağ Sütun: Seçili Profil Ayarları -->
+                        <StackPanel Grid.Column="2">
+                            <Grid Margin="0,0,0,12">
+                                <TextBlock Text="Sağlayıcı Bağlantı Ayarları" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <ComboBox Width="180"
+                                              ItemsSource="{Binding ProviderNames}"
+                                              SelectedItem="{Binding SelectedEditProvider, Mode=TwoWay}"
+                                              Margin="0,0,8,0"/>
+                                    <ui:Button Content="Sil"
+                                               Icon="{ui:SymbolIcon Delete24}"
+                                               Appearance="Transparent"
+                                               Command="{Binding DeleteProviderCommand}"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="10"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="10"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="10"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="130"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="API Endpoint URL:" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                <ui:TextBox Grid.Row="0" Grid.Column="1"
+                                            PlaceholderText="https://api.openai.com/v1 veya http://localhost:11434/v1"
+                                            Text="{Binding EditEndpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="API Anahtarı:" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                <ui:PasswordBox x:Name="TxtProviderApiKey"
+                                                Grid.Row="2" Grid.Column="1"
+                                                PlaceholderText="sk-... veya AIza..."
+                                                PasswordChanged="TxtProviderApiKey_PasswordChanged"/>
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Varsayılan Model:" VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                <Grid Grid.Row="4" Grid.Column="1">
+                                    <ComboBox IsEditable="True"
+                                              StaysOpenOnEdit="True"
+                                              IsTextSearchEnabled="True"
+                                              ItemsSource="{Binding EditProviderModels}"
+                                              Text="{Binding EditDefaultModel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              ToolTip="Mevcut modelleri görmek için 'Modelleri Çek' veya 'Ping' butonunu kullanın ya da model adını doğrudan yazın."/>
+                                    <TextBlock Text="Ör: gpt-4o, gemini-2.5-flash, qwen2.5:14b"
+                                               Margin="12,0,34,0"
+                                               VerticalAlignment="Center"
+                                               IsHitTestVisible="False"
+                                               FontSize="12.5"
+                                               Opacity="0.65"
+                                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                               Visibility="{Binding EditDefaultModel, Converter={StaticResource EmptyToVisConverter}}"/>
+                                </Grid>
+
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Tanılama &amp; Modeller:" VerticalAlignment="Top" Margin="0,8,0,0"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Vertical">
+                                    <WrapPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <ui:Button Content="Ping (Bağlantı Testi)"
+                                                   Icon="{ui:SymbolIcon Pulse24}"
+                                                   Appearance="Secondary"
+                                                   Command="{Binding PingProviderCommand}"
+                                                   Margin="0,0,8,0"
+                                                   ToolTip="Sağlayıcıya bağlantı ve anahtar testi yapıp gecikmeyi (ms) ölçer; /models açıksa modelleri de getirir"/>
+                                        <ui:Button Content="Modelleri Çek"
+                                                   Icon="{ui:SymbolIcon ArrowSync24}"
+                                                   Appearance="Secondary"
+                                                   Command="{Binding FetchModelsCommand}"
+                                                   ToolTip="/models uç noktasından kullanılabilir modelleri otomatik getirir"/>
+                                    </WrapPanel>
+
+                                    <Border Margin="0,10,0,0"
+                                            Padding="10,7"
+                                            CornerRadius="6"
+                                            BorderThickness="1"
+                                            Visibility="{Binding HasProviderStatus, Converter={StaticResource BoolToVisConverter}}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{DynamicResource StudioAccentSoftBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{DynamicResource StudioAccentBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding ProviderStatusSucceeded}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource StudioSuccessSoftBrush}"/>
+                                                        <Setter Property="BorderBrush" Value="#4010B981"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding ProviderStatusSucceeded}" Value="False">
+                                                        <Setter Property="Background" Value="{DynamicResource StudioWarningSoftBrush}"/>
+                                                        <Setter Property="BorderBrush" Value="#40F59E0B"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <DockPanel LastChildFill="True">
+                                            <ui:ProgressRing DockPanel.Dock="Left"
+                                                             IsIndeterminate="True"
+                                                             Width="14" Height="14"
+                                                             Margin="0,0,8,0"
+                                                             Visibility="{Binding IsTestingProvider, Converter={StaticResource BoolToVisConverter}}"/>
+                                            <TextBlock Text="{Binding ProviderStatusMessage}"
+                                                       FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                        </DockPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- 2. Çoklu Ajan Rol Atamaları -->
+                <Border Background="{DynamicResource StudioCardBrush}"
+                        BorderBrush="{DynamicResource StudioBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="10"
+                        Padding="18">
+                    <StackPanel>
+                        <TextBlock Text="Ajan Rol ve Model Atamaları" FontSize="14" FontWeight="SemiBold"/>
+                        <TextBlock Text="Model ID boş bırakılırsa seçilen sağlayıcının varsayılan modeli kullanılır; listeden seçebilir veya doğrudan yazabilirsiniz."
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Margin="0,3,0,14"/>
+
+                        <!-- Sütun Başlıkları -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260"/>
+                                <ColumnDefinition Width="190"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="140"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Ajan Rolü" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                            <TextBlock Grid.Column="1" Text="Sağlayıcı" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="10,0"/>
+                            <TextBlock Grid.Column="2" Text="Özel Model ID" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource TextFillColorTertiaryBrush}" Margin="0,0,10,0"/>
+                            <TextBlock Grid.Column="3"
+                                       Text="Akıl Yürütme (Reasoning)"
+                                       FontSize="11.5"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                       ToolTip="none: düşünmeyi kapatır (destekleyen modellerde) · minimal · low · medium · high · xhigh (destekleyen modellerde)"/>
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding Agents}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource StudioCardElevatedBrush}"
+                                            BorderBrush="{DynamicResource StudioBorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="7"
+                                            Padding="12,10"
+                                            Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="248"/>
+                                                <ColumnDefinition Width="190"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="140"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" FontSize="12.5"/>
+                                                <TextBlock Text="{Binding RoleDescription}" FontSize="11"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                            </StackPanel>
+
+                                            <ComboBox Grid.Column="1"
+                                                      Margin="10,0"
+                                                      ItemsSource="{Binding DataContext.AgentProviderChoices, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                      SelectedItem="{Binding Provider, Mode=TwoWay}"/>
+
+                                            <Grid Grid.Column="2" Margin="0,0,10,0">
+                                                <ComboBox IsEditable="True"
+                                                          StaysOpenOnEdit="True"
+                                                          IsTextSearchEnabled="True"
+                                                          ItemsSource="{Binding AvailableModels}"
+                                                          Text="{Binding ModelId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                          ToolTip="Sağlayıcı modellerini listelemek için yukarıdan 'Modelleri Çek' veya 'Ping' butonunu kullanın ya da model adını yazın."/>
+                                                <TextBlock Text="(Sağlayıcı Varsayılanı)"
+                                                           Margin="12,0,34,0"
+                                                           VerticalAlignment="Center"
+                                                           IsHitTestVisible="False"
+                                                           FontSize="12.5"
+                                                           Opacity="0.65"
+                                                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                                           Visibility="{Binding ModelId, Converter={StaticResource EmptyToVisConverter}}"/>
+                                            </Grid>
+
+                                            <ComboBox Grid.Column="3"
+                                                      ItemsSource="{Binding DataContext.ReasoningEfforts, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                      SelectedItem="{Binding ReasoningEffort, Mode=TwoWay}"
+                                                      ToolTip="none (kapalı) ve xhigh seçenekleri kullanılan model/sağlayıcı desteğine bağlıdır. Emin değilseniz (Varsayılan) bırakın."/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- ALT SEKME 2: Prompt Editörü -->
+        <Grid Grid.Row="1"
+              IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}"
+              Visibility="{Binding SelectedSubTab, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Prompts}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    Background="{DynamicResource StudioCardBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="12,10"
+                    Margin="0,0,0,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ComboBox x:Name="CmbPromptFiles"
+                              Grid.Column="0"
+                              ItemsSource="{Binding PromptFiles}"
+                              SelectionChanged="CmbPromptFiles_SelectionChanged"/>
+
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding PromptSourceLabel}"
+                               VerticalAlignment="Center"
+                               Margin="14,0"
+                               FontSize="11.5"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding PromptSourceLabel}"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal">
+                        <ui:Button Content="Klasörü Aç"
+                                   Icon="{ui:SymbolIcon FolderOpen24}"
+                                   Appearance="Transparent"
+                                   Command="{Binding OpenPromptsFolderCommand}"
+                                   Margin="0,0,6,0"/>
+                        <ui:Button Content="Varsayılana Sıfırla"
+                                   Icon="{ui:SymbolIcon ArrowReset24}"
+                                   Appearance="Secondary"
+                                   Command="{Binding ResetPromptCommand}"
+                                   Margin="0,0,6,0"/>
+                        <ui:Button Content="Promptu Kaydet"
+                                   Icon="{ui:SymbolIcon Save24}"
+                                   Appearance="Primary"
+                                   Command="{Binding SavePromptCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="1"
+                    Background="{DynamicResource StudioCardBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="6">
+                <TextBox Text="{Binding PromptContent, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         AcceptsReturn="True"
+                         AcceptsTab="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                         FontFamily="Cascadia Mono, Consolas"
+                         FontSize="12.5"
+                         Padding="10"/>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

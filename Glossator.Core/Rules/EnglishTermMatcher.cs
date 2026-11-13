@@ -21,7 +21,7 @@ public static class EnglishTermMatcher
     {
         if (string.IsNullOrWhiteSpace(term))
         {
-            return new Regex("$^", RegexOptions.None, DefaultTimeout);
+            return new Regex("(?!)", RegexOptions.None, DefaultTimeout);
         }
 
         return MatcherCache.GetOrAdd(term, static t =>

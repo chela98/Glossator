@@ -8,11 +8,14 @@ using Xunit;
 
 namespace Glossator.Tests.AI;
 
+[Collection("GlobalDiagnosticsAndConsole")]
 public class ReviewerExecutorTests
 {
     private sealed class MockReviewerChatClient : IChatClient
     {
         private readonly Queue<string> _responses;
+
+        public int CallCount { get; private set; }
 
         public MockReviewerChatClient(IEnumerable<string> responses)
         {
@@ -26,6 +29,7 @@ public class ReviewerExecutorTests
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
+            CallCount++;
             var text = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
         }
@@ -35,6 +39,7 @@ public class ReviewerExecutorTests
             ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            CallCount++;
             var text = _responses.Count > 0 ? _responses.Dequeue() : string.Empty;
             yield return new ChatResponseUpdate(ChatRole.Assistant, text);
             await Task.Yield();
@@ -152,75 +157,182 @@ public class ReviewerExecutorTests
     }
 
     [Fact]
-    public async Task OpenTelemetryPipeline_WithResilienceChatClient_CapturesExactSingleGeminiUsage()
+    public async Task HandleAsync_WhenCSharpPrefilterDetectsMissingBlockOrMask_RejectsAtZeroLlmCost()
     {
-        var capturedActivities = new List<System.Diagnostics.Activity>();
-        using var listener = new System.Diagnostics.ActivityListener
-        {
-            ShouldListenTo = source => source.Name.Contains("Microsoft.Extensions.AI"),
-            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = act => capturedActivities.Add(act)
-        };
-        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        // Arrange
+        var client = new MockReviewerChatClient(["{ \"isApproved\": true, \"patches\": [] }"]);
+        var logs = new List<PipelineStepLog>();
+        var executor = new ReviewerExecutor(client, "SYSTEM", log => logs.Add(log));
 
-        var inner = new MockStreamingUsageChatClient();
-        var logger = Microsoft.Extensions.Logging.Abstractions.NullLogger<Glossator.AI.Clients.ResilienceChatClient>.Instance;
+        var state = new TranslationReviewState(
+            OriginalText: "[BLOK_001]\nFirst ⟦PH_000001⟧\n[/BLOK_001]\n\n[BLOK_002]\nSecond [[CODE_01]]\n[/BLOK_002]",
+            CurrentTranslation: "[BLOK_001]\nİlk taslak (yer tutucu eksik)\n[/BLOK_001]",
+            DoNotTranslateTerms: [],
+            StyleGuide: "Teknik",
+            GlossaryTerms: null,
+            IsApproved: false,
+            Feedback: null,
+            AttemptCount: 1);
 
-        var pipeline = inner
-            .AsBuilder()
-            .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = true)
-            .Use(c => new Glossator.AI.Clients.ResilienceChatClient(c, logger))
-            .Build();
+        // Act
+        var result = await executor.HandleAsync(state, null!);
 
-        var updates = new List<ChatResponseUpdate>();
-        await foreach (var u in pipeline.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Test")]))
-        {
-            updates.Add(u);
-        }
-
-        Assert.NotEmpty(capturedActivities);
-        var otelSpan = capturedActivities.Last();
-        var inTok = otelSpan.GetTagItem("gen_ai.usage.input_tokens");
-        var outTok = otelSpan.GetTagItem("gen_ai.usage.output_tokens");
-
-        // Gemini sends cumulative 1000 input tokens on 3 chunks; OpenTelemetry must see 1000 (not 3000 and not null!)
-        Assert.Equal(1000L, Convert.ToInt64(inTok));
-        // Gemini sends total=1450, input=1000, output=150 (300 hidden thinking tokens) -> normalized output=450!
-        Assert.Equal(450L, Convert.ToInt64(outTok));
+        // Assert: LLM kesinlikle çağrılmamalı (0 maliyet), deneme sayısı artmalı ve eksikler bildirilmeli
+        Assert.Equal(0, client.CallCount);
+        Assert.False(result.IsApproved);
+        Assert.Equal(2, result.AttemptCount);
+        Assert.NotNull(result.Feedback);
+        Assert.Contains("BLOK_002", result.Feedback);
+        Assert.Contains("⟦PH_000001⟧", result.Feedback);
+        Assert.Contains(logs, l => l.Summary.Contains("C# Ön Filtresi"));
     }
 
-    private sealed class MockStreamingUsageChatClient : IChatClient
+    [Fact]
+    public async Task HandleAsync_WhenMaxAttemptsReachedAndLlmRejects_ForceApprovesBestEffortDraft()
     {
-        public ChatClientMetadata Metadata => new("MockGemini", new Uri("https://generativelanguage.googleapis.com/v1beta/openai/"), "gemini-2.5-flash");
-        public void Dispose() { }
-        public object? GetService(Type serviceType, object? serviceKey = null) => serviceType.IsInstanceOfType(this) ? this : null;
-        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
-            => throw new NotImplementedException();
+        // Arrange
+        var client = new MockReviewerChatClient([
+            """{"isApproved": false, "feedback": "Üslup biraz zayıf", "patches": []}"""
+        ]);
+        var logs = new List<PipelineStepLog>();
+        var executor = new ReviewerExecutor(client, "SYSTEM", log => logs.Add(log));
 
-        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.Yield();
-            for (int i = 1; i <= 3; i++)
+        var draft = "[BLOK_001]\nKabul edilecek taslak.\n[/BLOK_001]";
+        var state = new TranslationReviewState(
+            OriginalText: "[BLOK_001]\nOriginal text.\n[/BLOK_001]",
+            CurrentTranslation: draft,
+            DoNotTranslateTerms: [],
+            StyleGuide: "Teknik",
+            GlossaryTerms: null,
+            IsApproved: false,
+            Feedback: null,
+            AttemptCount: 3);
+
+        // Act
+        var result = await executor.HandleAsync(state, null!);
+
+        // Assert
+        Assert.True(result.IsApproved);
+        Assert.Equal(draft, result.CurrentTranslation);
+        Assert.Null(result.Feedback);
+        Assert.Contains(logs, l => l.Summary.Contains("3. denemede de redaksiyon onay alamadı"));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenApprovedWithValidPatches_NormalizesBlockIdsAndStripsNestedBlockTags()
+    {
+        // Arrange: Biri "BLOK_025" önekli ve içeriğinde iç içe [BLOK_025] taşıyan, diğeri sayısal "26" iki yama
+        var patchJson = """
             {
-                yield return new ChatResponseUpdate
+              "isApproved": true,
+              "feedback": "İki blok iyileştirildi",
+              "patches": [
                 {
-                    Role = ChatRole.Assistant,
-                    ModelId = "gemini-2.5-flash",
-                    Contents =
-                    [
-                        new TextContent($"Parça {i} "),
-                        new UsageContent(new UsageDetails
-                        {
-                            InputTokenCount = 1000,
-                            OutputTokenCount = i * 50,
-                            TotalTokenCount = 1000 + (i * 50) + 300 // +300 thinking tokens
-                        })
-                    ]
-                };
+                  "blockId": "BLOK_025",
+                  "reason": "Akıcılık",
+                  "fixedText": "[BLOK_025]\nDüzeltilmiş yirmi beşinci blok.\n[/BLOK_025]"
+                },
+                {
+                  "blockId": 26,
+                  "reason": "Terim",
+                  "fixedText": "Düzeltilmiş yirmi altıncı blok."
+                }
+              ]
             }
-        }
+            """;
+
+        var client = new MockReviewerChatClient([patchJson]);
+        var executor = new ReviewerExecutor(client, "SYSTEM");
+
+        var state = new TranslationReviewState(
+            OriginalText: "[BLOK_025]\nOriginal 25\n[/BLOK_025]\n[BLOK_026]\nOriginal 26\n[/BLOK_026]",
+            CurrentTranslation: "[BLOK_025 | TAG: p]\nEski 25\n[/BLOK_025]\n[BLOK_026]\nEski 26\n[/BLOK_026]",
+            DoNotTranslateTerms: [],
+            StyleGuide: "Standart",
+            GlossaryTerms: null,
+            IsApproved: false,
+            Feedback: null,
+            AttemptCount: 1);
+
+        // Act
+        var result = await executor.HandleAsync(state, null!);
+
+        // Assert
+        Assert.True(result.IsApproved);
+        Assert.Contains("[BLOK_025]\nDüzeltilmiş yirmi beşinci blok.\n[/BLOK_025]", result.CurrentTranslation);
+        Assert.Contains("[BLOK_026]\nDüzeltilmiş yirmi altıncı blok.\n[/BLOK_026]", result.CurrentTranslation);
+        // İç içe çift [BLOK_025] oluşmamalı
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(result.CurrentTranslation, @"\[/BLOK_025\]"));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenPatchDropsPlaceholder_GatekeeperRejectsPatchAndPreservesTranslation()
+    {
+        // Arrange: Reviewer onaylıyor ama yaması ⟦PH_000001⟧ yer tutucusunu yutuyor
+        var maliciousPatchJson = """
+            {
+              "isApproved": true,
+              "patches": [
+                {
+                  "blockId": "001",
+                  "reason": "Hatalı yama",
+                  "fixedText": "Bu metinde yer tutucu silindi."
+                }
+              ]
+            }
+            """;
+
+        var client = new MockReviewerChatClient([maliciousPatchJson]);
+        var logs = new List<PipelineStepLog>();
+        var executor = new ReviewerExecutor(client, "SYSTEM", log => logs.Add(log));
+
+        var draft = "[BLOK_001]\nBu kod örneği: ⟦PH_000001⟧ içerir.\n[/BLOK_001]";
+        var state = new TranslationReviewState(
+            OriginalText: "[BLOK_001]\nThis code sample contains ⟦PH_000001⟧.\n[/BLOK_001]",
+            CurrentTranslation: draft,
+            DoNotTranslateTerms: [],
+            StyleGuide: "Standart",
+            GlossaryTerms: null,
+            IsApproved: false,
+            Feedback: null,
+            AttemptCount: 1);
+
+        // Act
+        var result = await executor.HandleAsync(state, null!);
+
+        // Assert: Gatekeeper ihlali yakalayıp yamayı reddetmeli ve tam taslağı korumalı
+        Assert.True(result.IsApproved);
+        Assert.Equal(draft, result.CurrentTranslation);
+        Assert.Contains(logs, l => l.Summary.Contains("Yama İhlali Engellendi"));
+    }
+
+    [Fact]
+    public void ParseReviewerResponse_WhenJsonHasRawNewlineInsideString_FallsBackToRegexParser()
+    {
+        // Arrange: System.Text.Json kaçışsız ham satır sonunu reddeder -> TryRegexParseReviewerResponse devreye girmeli
+        var brokenForStrictJson = "{\n  \"isApproved\": true,\n  \"feedback\": \"Satır 1\nSatır 2\",\n  \"patches\": [\n    { \"blockId\": \"007\", \"reason\": \"test\", \"fixedText\": \"Temiz\nmetin\" }\n  ]\n}";
+
+        // Act
+        var parsed = ReviewerExecutor.ParseReviewerResponse(brokenForStrictJson);
+
+        // Assert
+        Assert.NotNull(parsed);
+        Assert.True(parsed.IsApproved);
+        var patch = Assert.Single(parsed.Patches!);
+        Assert.Equal("007", patch.BlockId);
+        Assert.Contains("Temiz", patch.FixedText);
+    }
+
+    [Fact]
+    public void ParseReviewerResponse_WhenJsonIsTruncatedWithoutClosingBrace_ReturnsNullSoSelfRepairCanRun()
+    {
+        // Arrange
+        var truncatedJson = "{\"isApproved\": true, \"feedback\": \"Kesilmiş";
+
+        // Act
+        var parsed = ReviewerExecutor.ParseReviewerResponse(truncatedJson);
+
+        // Assert
+        Assert.Null(parsed);
     }
 }

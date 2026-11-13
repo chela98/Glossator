@@ -12,6 +12,7 @@ using Glossator.Core.Packaging;
 using Glossator.Core.Parsing;
 using Glossator.Core.Rules;
 using Glossator.Core.Serialization;
+using Glossator.Core.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -72,7 +73,8 @@ if (args.Length == 1 && (args[0].Equals("--help", StringComparison.OrdinalIgnore
         new FigletText("GLOSSATOR")
             .Color(Color.Cyan1));
 
-    AnsiConsole.MarkupLine("[bold cyan]GLOSSATOR - Kitap Yerelleştirme ve Terim Yönetim Sistemi (.NET 10 / MAF)[/]\n");
+    AnsiConsole.MarkupLine("[bold cyan]GLOSSATOR - Kitap Yerelleştirme ve Terim Yönetim Sistemi (.NET 10 / MAF)[/]");
+    AnsiConsole.MarkupLine("[dim]Geliştirici: Emre Dalbudak  •  GitHub: https://github.com/chela98  •  LinkedIn: https://www.linkedin.com/in/emre-dalbudak/[/]\n");
     AnsiConsole.MarkupLine("[bold yellow]Kullanım Standartları:[/]\n");
     AnsiConsole.MarkupLine("  [green]1. Kitap Çeviri Hattı (Worker Pool & Single-Writer):[/]");
     AnsiConsole.MarkupLine("     [dim]glossator[/] [cyan]<kitap-klasörü-veya-.epub>[/] [yellow][[-o çıktı.epub]] [[-j 3]] [[--fresh]] [[--test]][/]");
@@ -91,7 +93,8 @@ AnsiConsole.Write(
     new FigletText("GLOSSATOR")
         .Color(Color.Cyan1));
 
-AnsiConsole.MarkupLine("[bold cyan]Microsoft Agent Framework (.NET 10) Tabanlı Kitap Yerelleştirme Boru Hattı[/]\n");
+AnsiConsole.MarkupLine("[bold cyan]Microsoft Agent Framework (.NET 10) Tabanlı Kitap Yerelleştirme Boru Hattı[/]");
+AnsiConsole.MarkupLine("[dim]Geliştirici: Emre Dalbudak  •  GitHub: https://github.com/chela98  •  LinkedIn: https://www.linkedin.com/in/emre-dalbudak/[/]\n");
 
 // Graceful Shutdown & Cancellation Yönetimi (Ctrl+C / SIGINT)
 using var cts = new CancellationTokenSource();
@@ -226,6 +229,7 @@ try
     }
 
     hostBuilder.Configuration
+        .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
         .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
         .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: false)
         .AddJsonFile(userSettingsPath, optional: true, reloadOnChange: false)
@@ -307,7 +311,7 @@ try
         if (aiOptions.Providers.TryGetValue(providerName, out var providerConfig))
         {
             // Localhost / 127.0.0.1 (Ollama, LM Studio vb.) için API Key zorunlu değildir
-            bool isLocal = providerConfig.Endpoint.Contains("localhost") || providerConfig.Endpoint.Contains("127.0.0.1");
+            bool isLocal = Glossator.AI.Configuration.GlossatorAiOptions.IsLocalEndpoint(providerConfig.Endpoint);
 
             if (!isLocal && (string.IsNullOrWhiteSpace(providerConfig.ApiKey) || providerConfig.ApiKey.Contains("YOUR_")))
             {
@@ -387,6 +391,7 @@ try
     // Per-chapter Scoped dependencies
     hostBuilder.Services.AddScoped(_ => new TermUsageTracker("default"));
     hostBuilder.Services.AddScoped<TermGlossingPostProcessor>();
+    hostBuilder.Services.AddSingleton<IExchangeRateService, ExchangeRateService>();
     hostBuilder.Services.AddSingleton<ParallelLocalizationEngine>();
 
     hostBuilder.Services.Configure<GlossatorAiOptions>(opts =>

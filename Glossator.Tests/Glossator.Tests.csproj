@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
@@ -19,6 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
     <Using Include="Xunit" />
   </ItemGroup>
 
@@ -26,6 +29,7 @@
     <ProjectReference Include="..\Glossator.Core\Glossator.Core.csproj" />
     <ProjectReference Include="..\Glossator.AI\Glossator.AI.csproj" />
     <ProjectReference Include="..\Glossator.Cli\Glossator.Cli.csproj" />
+    <ProjectReference Include="..\Glossator.App\Glossator.App.csproj" />
   </ItemGroup>
 
 </Project>

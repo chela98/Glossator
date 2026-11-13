@@ -1,398 +1,179 @@
-<div align="center">
+# Glossator — .NET 10 Multi-Agent EPUB Teknik Yerelleştirme Platformu
 
-# GLOSSATOR
+[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=flat-square&logo=dotnet)](https://dotnet.microsoft.com/download/dotnet/10.0)
+[![Microsoft Agent Framework](https://img.shields.io/badge/Microsoft%20Agent%20Framework-1.24.0-0078D4?style=flat-square)](https://learn.microsoft.com/en-us/agent-framework/)
+[![Tests](https://img.shields.io/badge/Tests-458%2F458%20Passing-2EA44F?style=flat-square)](#kalite-ve-test-paketi)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-**Teknik E-Kitap Yerelleştirme ve Terim Yönetim Motoru**  
-*Enterprise Technical Book Localization & Terminology Governance Engine*
+**Glossator**, İngilizce teknik kitapları ve mühendislik belgelerini (`.epub`) HTML/XHTML tasarımını, kod bloklarını ve teknik terminolojiyi bozmadan Türkçe'ye kazandıran **çok ajanlı (.NET 10 + Microsoft Agent Framework)** yerelleştirme stüdyosu (**Glossator Studio**) ve komut satırı motorudur (**Glossator CLI**).
 
-[![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?style=for-the-badge&logo=dotnet)](https://dotnet.microsoft.com/)
-[![MAF](https://img.shields.io/badge/Orchestration-Microsoft_Agent_Framework-0078D4?style=for-the-badge&logo=microsoft)](https://github.com/microsoft/agent-framework)
-[![Tests](https://img.shields.io/badge/Unit_Tests-109%2F109_Passing-success?style=for-the-badge&logo=checkmarx)](https://github.com)
-[![AI Engine](https://img.shields.io/badge/AI_Engine-OpenAI--Compatible_Universal-blue?style=for-the-badge)](https://github.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-
-<br/>
-
-> **"Teknik literatürü ana dilde okurken yaşanan bilişsel yorgunluğu ortadan kaldıran; ancak sektör standardı İngilizce jargondan koparmayan ve AST düzeyinde kod bütünlüğünü %100 koruyan yeni nesil doküman yerelleştirme motoru."**
-
-</div>
+Geleneksel çeviri araçlarının veya ham LLM istemlerinin aksine Glossator, **deterministik C# DOM ayrıştırma kurallarını**, **çevrimsel yapay zekâ iş akışlarını (`StyleAnalyst` → `Translator` ⇄ `Reviewer`)** ve **pedagojik aşamalı sözlük motorunu (`ProgressiveGloss`)** aynı boru hattında birleştirir.
 
 ---
 
-## Çözülen Problem: Geleneksel Çeviri Araçları Neden Yetersiz Kalır?
+## Görsel Çıktı Kanıtları
 
-Teknik bir kitabı (O'Reilly, Manning, Pragmatic Bookshelf vs) DeepL, Google Translate, Calibre eklentileri veya standart Python betikleriyle çevirmeye çalıştığınızda üç temel sorunla karşılaşırsınız:
+Gerçek bir O'Reilly teknik kitabı (*Deep Search* / *AI Engineering* vb.) üzerinde Glossator çıktılarının EPUB okuyucu görünümü:
 
-1. **Kod Bloklarının Bozulması:** Çeviriciler kodların içindeki değişkenleri, komut satırı argümanlarını (`--requests-per-user` ➔ `--kullanıcı-başına-istek`) ve Python `f-string` girintilerini tercüme ederek kodu çalışmaz hale getirir.
-2. **EPUB Omurgasının ve CSS Düzeninin Çökmesi:** HTML/XHTML düğüm hiyerarşisi bozulur, callout kutuları ezilir ve EPUB W3C standart hatası (RSC-007) vererek e-okuyucularda açılmaz.
-3. **Terminoloji İkilemi (Bilişsel Yük vs. Jargondan Kopuş):**
-   * Ya her şey aşırı Türkçeleştirilir (*"iş parçacığı havuzu"*, *"çöp toplayıcı"*, *"kalıp kod"*) ve mühendis terminal başına geçtiğinde ne arayacağını bilemez;
-   * Ya da yabancı dilde okunur ve iş çıkışında metroda/tablette okurken aşırı zihinsel yorgunluk yarattığı için kitap 20. sayfada terk edilir.
-
-**Glossator'ın Çözümü:**
-* **AngleSharp AST Düğüm Ağacı Maskelemesi:** Kod blokları, etiketler ve f-stringler `⟦PH_000001⟧` belirteçleriyle kriptografik olarak kilitlenir; model koda fiziksel olarak temas edemez.
-* **Hibrit Pedagojik Terminoloji:** Sektör standardı kavramlar ilk geçişte `Türkçe (İngilizce)` olarak tanıtılır (`hazır kod (boilerplate)`, `TTFT'yi (Time To First Token)`), okuyucu akıcı dilde kavrar ama evrensel jargondan kopmaz.
-
----
-
-## Canlı Çeviri Çıktıları (Sahada Doğrulandı)
-
-Glossator bizzat **3 tam teknik kitap** (yüz binlerce kelime ve karmaşık kod blokları) üzerinde test edilmiş ve sıfır biçimlendirme kaybıyla EPUB standardında teslim edilmiştir:
-
-| Orijinal Kod & İki Dilli Hibrit Terimler | Python f-string ve Callout Kutusu Bütünlüğü |
+| Karmaşık Tablo ve Kod/Matematik Koruması | Aşamalı Terminoloji ve Teknik Çeviri |
 | :---: | :---: |
-| ![Benchmarking Translation](docs/assets/sample_translation_benchmarking.jpg) | ![Deep Search Code Translation](docs/assets/sample_translation_deepsearch_code.png) |
-| *Python CLI parametreleri ve `TTFT'yi (Time To First Token)` gibi ekler korunur.* | *O'Reilly Callout kutusu stili ve Python girintileri 1 piksel bile sapmaz.* |
+| ![Deep Search Çeviri Örneği](docs/assets/sample_translation_deepsearch_code.png) | ![Benchmarking Çeviri Örneği](docs/assets/sample_translation_benchmarking.jpg) |
+
+> Dikkat edilirse `<pre>`, `<code>`, `<math>` ve `<svg>` düğümleri AST düzeyinde korunmuş; başlıklar `İngilizce (Türkçe)` hiyerarşisinde sunulmuş; teknik jargon bozulmadan akıcı Türkçe sağlanmıştır.
 
 ---
 
-## Mimari Tasarım (Enterprise Architecture)
-
-Glossator; deterministik kural motoru, asenkron kanallar ve Microsoft Agent Framework döngüsünü birleştiren 4 katmanlı bir mimariye sahiptir:
+## Çözüm Mimarisi (5 Proje)
 
 ```mermaid
 flowchart TD
-    subgraph Ingestion["1. Ayrıştırma & AST Maskeleme"]
-        Epub[".epub Dosyası"] --> Parser["AngleSharp DOM TreeWalker"]
-        Parser --> Masker["Placeholder Masking (⟦PH_xxxxxx⟧)"]
-        Masker --> Chunker["Semantic Block Chunker ([BLOK_xxx])"]
+    subgraph S1["1. Güvenli Açma ve Sınıflandırma (Glossator.Core)"]
+        Zip["SafeZipExtractor (Zip-Slip / 1 GB Sınırı)"] --> OPF["EpubManifestReader (OPF & Spine)"]
+        OPF --> Cls["EpubDocumentClassifier (Chapter, Auxiliary, Nav, Cover, Index)"]
     end
 
-    subgraph Governance["2. Terim Yönetimi & State-Machine"]
-        Sqlite["SQLite Master SSOT (~/.glossator/glossator.db)"]
-        Seed["seed_glossary.yaml (Gömülü Kaynak)"] --> Sqlite
-        Chunker --> PreProcessor["TermGlossingPostProcessor"]
-        Sqlite <--> PreProcessor
-        Tracker["TermUsageTracker (Bölüm İçi Sayaç)"] <--> PreProcessor
+    subgraph S2["2. AST Maskeleme ve Kesitleme (Glossator.Core)"]
+        Cls --> Seg["HtmlSegmenter (Self-Closing Normalize, pre Blok Dışlama)"]
+        Seg --> Mask["DomTreeWalkerMasker (⟦PH_xxxxxx⟧ Yer Tutucu)"]
+        Mask --> Grp["HtmlSectionGrouper (1200–2800 Token, Maks 28 Blok)"]
     end
 
-    subgraph AgenticLoop["3. Microsoft Agent Framework Döngüsü"]
-        PreProcessor --> |"Dinamik Prompt Giydirme"| Translator["TranslatorAgent (.NET 10 / MAF)"]
-        Translator --> |"İlk Taslak"| Reviewer["ReviewerAgent (Tonal Denetçi)"]
-        Reviewer --> |"JSON Patch"| PatchEngine["C# Patch Merger"]
-        Reviewer -.-> |"Red / Düzeltme Emri"| Translator
+    subgraph S3["3. Çoklu Ajan Hattı ve Kurtarma (Glossator.AI)"]
+        Grp --> Pre["TermGlossingPostProcessor + TermUsageTracker"]
+        Pre --> Style["StyleAnalystExecutor (Üslup Kılavuzu)"]
+        Style --> Trans["TranslatorExecutor (SSE Akışı)"]
+        Trans --> Rev["ReviewerExecutor (C# Ön Filtre + JSON Patch + Self-Repair)"]
+        Rev -.->|"İade (Maks 3 Deneme)"| Trans
+        Rev --> Rec["DirectTranslatorFallback & MicroRecovery"]
     end
 
-    subgraph Persistence["4. Asenkron Teslimat & Paketleme"]
-        PatchEngine --> Channel["BoundedChannel (Single-Writer Queue)"]
-        Channel --> BgWriter["CheckpointBackgroundWriter (SQLite)"]
-        BgWriter --> StrictPackager["StrictXhtmlMarkupFormatter & EpubPackager"]
-        StrictPackager --> Output[".epub (W3C EPUB 3 / RSC-007 Uyumlu)"]
+    subgraph S4["4. Checkpoint, İzolasyon ve Strict EPUB"]
+        Rec --> Chk["CheckpointStore (BoundedChannel 5000 + SQLite WAL)"]
+        Chk --> DoneCheck{"HtmlSegment.IsTranslationComplete?"}
+        DoneCheck -->|"Tam"| Done["output_tr.xhtml + .done"]
+        DoneCheck -->|"Eksik / Kısmi Mod"| Part["output_tr.xhtml.part (İzole)"]
+        Done --> Pack["EpubPackager & StrictXhtmlMarkupFormatter"]
     end
 ```
 
----
+### Çözüm Projeleri ([Glossator.slnx](Glossator.slnx))
 
-## 3 Seviyeli Terim Politikası (Glossing Policy Engine)
-
-Glossator veritabanında her terim deterministik bir durum makinesine bağlıdır:
-
-| Politika | Enum | Açıklama | Örnek Çıktı |
-| :--- | :---: | :--- | :--- |
-| **`ProgressiveGloss`** | `0` | **Aşamalı Pedagojik Tanıtım:** Bölüm içinde ilk 2 geçişte hibrit, sonraki geçişlerde yalın Türkçe. | `hazır kod (boilerplate)` ➔ `hazır kod` |
-| **`AlwaysEnglish`** | `1` | **Dokunulmaz Sektör Jargonu:** Markalar, protokoller, SDK'ler ve kısaltmalar asla çevrilmez. | `LLM`, `REST API`, `Docker`, `Kubernetes` |
-| **`AlwaysTurkish`** | `2` | **Düz Teknik Terimler:** Doğrudan yerleşik Türkçe karşılık kullanılır, parantez açılmaz. | `veri` *(data)*, `maliyet` *(cost)*, `modeller` |
-
-### Karantina / Staging Sözlük Mimarisi
-Yeni bir kitap işlendiğinde `--extract-terms` bayrağı ile çıkarılan ham dizin kelimeleri **asla ana veritabanını kirletmez.** 
-Kitap klasörüne `glossary.extracted.yaml` olarak kaydedilir. Kullanıcı inceleyip onayladıklarını tek komutla Master SSOT havuzuna aktarır:
-
-```bash
-glossator glossary import -i ./glossary.extracted.yaml
-```
-
----
-
-## Dağıtım Paketi Dizin Yapısı (Distribution Layout)
-
-Glossator, .NET 10 çalışma zamanını kendi bünyesinde barındıran bağımsız bir paket olarak dağıtılır. Makinenizde hiçbir SDK veya C# derleyicisi kurulu olmak zorunda değildir:
-
-```text
-glossator-release-win-x64/
-│
-├── glossator.exe              # Bağımsız ana motor (.NET 10 runtime içerir, kurulumsuz çalışır)
-├── e_sqlite3.dll              # Yerel SQLite C çalışma kütüphanesi (Terim veritabanı için zorunludur, silmeyiniz)
-├── appsettings.json           # Model, API anahtarı, endpoint ve oran sınırlandırma yapılandırması
-├── appsettings.example.json   # Kurumsal yedek yapılandırma şablonu
-│
-└── Prompts/                   # Dışarıdan düzenlenebilir sistem istemleri (KOD DERLEME GEREKTİRMEZ)
-    ├── StyleAnalystPrompt.md  # 1. Ajan: Yazarın sesini, üslup ve ton haritasını çıkaran direktör
-    ├── TranslatorPrompt.md    # 2. Ajan: AST/XHTML uyumlu pedagojik hibrit çevirmen
-    └── ReviewerPrompt.md      # 3. Ajan: Tonal kalibrasyon ve JSON Patch üreten baş editör
-```
-
-> [!IMPORTANT]
-> **`e_sqlite3.dll` Dosyası:** Windows üzerinde SQLite motorunun yerel C seviyesinde yüksek performansla çalışmasını sağlar. Bu dosyanın `glossator.exe` ile aynı klasörde kalması zorunludur.
-
----
-
-## Yapılandırma ve AI Sağlayıcı Entegrasyonu (Multi-Provider Support)
-
-Glossator, .NET 10 `Microsoft.Extensions.AI` soyutlaması üzerinden tüm **OpenAI-uyumlu (OpenAI-compatible)** LLM uç noktalarını yerel olarak destekler. Kodu yeniden derlemenize gerek yoktur; `glossator.exe` dosyasının yanındaki `appsettings.json` dosyasını düzenlemeniz yeterlidir.
-
-### Temel Yapılandırma (`appsettings.json`)
-
-```json
-{
-  "GlossatorAi": {
-    "ActiveProvider": "Evren",
-    "Providers": {
-      "Evren": {
-        "Endpoint": "https://evren-llmapi.ssyz.org.tr/v1",
-        "ApiKey": "YOUR_EVREN_API_KEY",
-        "DefaultModel": "deepseek-v4.1-flash"
-      },
-      "OpenAI": {
-        "Endpoint": "https://api.openai.com/v1",
-        "ApiKey": "YOUR_OPENAI_API_KEY",
-        "DefaultModel": "gpt-4o"
-      },
-      "Gemini": {
-        "Endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "ApiKey": "YOUR_GEMINI_API_KEY",
-        "DefaultModel": "gemini-2.5-flash"
-      },
-      "Custom": {
-        "Endpoint": "https://your-custom-endpoint/v1",
-        "ApiKey": "YOUR_CUSTOM_API_KEY",
-        "DefaultModel": "your-model-name"
-      }
-    }
-  }
-}
-```
-
-### Sağlayıcı Kullanım Senaryoları
-
-#### Senaryo 1: SSB EVREN LLM API (Varsayılan)
-Türkiye Cumhuriyeti Savunma Sanayii Başkanlığı EVREN Portalı altyapısını kullanmak için:
-```json
-"ActiveProvider": "Evren"
-```
-ve `Providers.Evren.ApiKey` alanına EVREN anahtarınızı yazın.
-
-#### Senaryo 2: OpenAI (Resmi API)
-Doğrudan OpenAI modellerini (`gpt-4o`, `gpt-4o-mini`) kullanmak için:
-```json
-{
-  "GlossatorAi": {
-    "ActiveProvider": "OpenAI",
-    "Providers": {
-      "OpenAI": {
-        "Endpoint": "https://api.openai.com/v1",
-        "ApiKey": "sk-proj-KENDI_OPENAI_ANAHTARINIZ",
-        "DefaultModel": "gpt-4o"
-      }
-    }
-  }
-}
-```
-*Tüm ajanlar otomatik olarak `gpt-4o` modeline bağlanır ve sistem diğer sağlayıcıların anahtarını istemez.*
-
-#### Senaryo 3: Google Gemini
-Google AI Studio üzerinden OpenAI-uyumlu Gemini endpoint'ini kullanmak için:
-```json
-{
-  "GlossatorAi": {
-    "ActiveProvider": "Gemini",
-    "Providers": {
-      "Gemini": {
-        "Endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "ApiKey": "AIzaSy...",
-        "DefaultModel": "gemini-2.5-flash"
-      }
-    }
-  }
-}
-```
-
-#### Senaryo 4: Yerel / Çevrimdışı Mod (Ollama, LM Studio, vLLM)
-Verilerinizin makinenizden dışarı çıkmasını istemiyorsanız, yerel modelleri tamamen ücretsiz ve çevrimdışı çalıştırabilirsiniz. Localhost bağlantılarında Glossator API anahtarı denetimini otomatik olarak atlar:
-```json
-{
-  "GlossatorAi": {
-    "ActiveProvider": "Custom",
-    "Providers": {
-      "Custom": {
-        "Endpoint": "http://localhost:11434/v1",
-        "ApiKey": "ollama",
-        "DefaultModel": "qwen2.5:32b"
-      }
-    }
-  }
-}
-```
-*(LM Studio için endpoint: `http://localhost:1234/v1`, vLLM için: `http://localhost:8000/v1`)*
-
-#### Senaryo 5: Özel Proxy veya Diğer LLM Servisleri (Groq, DeepSeek, OpenRouter)
-OpenAI standardını destekleyen herhangi bir üçüncü parti servisi `Custom` altına tanımlayabilirsiniz:
-```json
-{
-  "GlossatorAi": {
-    "ActiveProvider": "Custom",
-    "Providers": {
-      "Custom": {
-        "Endpoint": "https://api.groq.com/openai/v1",
-        "ApiKey": "gsk_...",
-        "DefaultModel": "llama-3.3-70b-versatile"
-      }
-    }
-  }
-}
-```
-
----
-
-## İstem (Prompt) Yönetim Mimarisi ve Sıfır-Kod Özelleştirme
-
-Glossator'ın en güçlü mimari yönlerinden biri; sistemin yapay zekâ mantığını **C# koduna gömmemiş olmasıdır.** Tüm ajan rolleri, kurallar ve denetim kriterleri `Prompts/` klasörü altındaki standart Markdown dosyalarında yaşar.
-
-### 1. Üç Ajanlı İş Akışı ve İstemlerin Görevleri
-
-| İstem Dosyası | Ajan Rolü | Görevi ve Çalışma Prensibi |
+| Proje | Hedef Çerçeve | Görev |
 | :--- | :--- | :--- |
-| **`StyleAnalystPrompt.md`** | **Üslup & Ton Direktörü** | Bölümün ilk 2.500 karakterini analiz ederek yazarın sesini, hitap kipini ve mühendislik yaklaşımını çıkarır. Bölüm başında bir kez çalışır ve ürettiği `[YAZAR ÜSLUP KILAVUZU]` diğer iki ajanın KV-Cache prefix'ine yerleşir. |
-| **`TranslatorPrompt.md`** | **Kıdemli Çevirmen** | AST maskelemesi yapılmış `[BLOK_xxx]` parçalarını, sözlükteki terimleri ve üslup kılavuzunu harmanlayarak akıcı Türkçeye çevirir. Başlıklar için zorunlu `İngilizce (Türkçe)` kuralını uygular. |
-| **`ReviewerPrompt.md`** | **Baş Editör & Redaktör** | Çeviri taslağını orijinal metinle kıyaslar. Aşırı robotik veya yapay felsefi sapmaları dengeler. Tüm metni yeniden yazmak yerine token tasarrufu sağlayan **JSON Patch** sözleşmesiyle yalnızca hatalı blokları düzeltir. |
-
-### 2. Disk-First Öncelik Mimarisi (Nasıl Çalışır?)
-
-Glossator'ın `PromptLoader` servisi disk öncelikli bir mimariye sahiptir:
-1. **Birincil Öncelik (Kullanıcı Özelleştirmesi):** Motor, öncelikle `glossator.exe` yanındaki `Prompts/` klasörünü (veya kitap çalışma dizinini) tarar. Dosya diskte mevcutsa doğrudan diskten yükler.
-2. **İkincil Öncelik (Varsayılan Fabrika Ayarları):** Eğer `Prompts/` klasörü silinmiş veya bulunamıyorsa, motor binary içerisine derlenmiş gömülü kaynaklara (Embedded Resource) geri düşer.
-
-Bu sayede:
-* Kullanıcılar Not Defteri veya VS Code ile `Prompts/*.md` dosyalarını açıp düzenlediklerinde, değişiklikler **derleme gerektirmeden bir sonraki çalıştırmada anında devreye girer.**
-* Dağıtılan `Prompts/` klasörü kaybolsa dahi `glossator.exe` çalışmayı sürdürür.
-
-### 3. Sıfır C# Kodu ile Kuralları Özelleştirme
-
-`Prompts/TranslatorPrompt.md` dosyasını açarak kurumunuza veya projenize özel kuralları saniyeler içinde ekleyebilirsiniz:
-
-```markdown
-### 5. Yasaklı Robotik Çeviri Kalıpları:
-- `tetiklemek` yerine bağlama göre `başlatmak` veya `yol açmak` kullanın.
-- `anlamı sulandı` KESİNLİKLE YASAK! => `kavramın içi boşaldı` kullanın.
-- Şirket içi jargonumuz gereği `pipeline` kelimesi `akış hattı` olarak çevrilmelidir.
-```
+| **`Glossator.Core`** | `net10.0` | Güvenli EPUB açma/paketleme, `AngleSharp` DOM segmentasyonu ve `⟦PH_xxxxxx⟧` maskeleme, SQLite terim motoru, `CheckpointStore`, canlı USD/TRY `ExchangeRateService` |
+| **`Glossator.AI`** | `net10.0` | `Microsoft.Agents.AI.Workflows` (`1.24.0`) döngüsel iş akışı, `ResilienceChatClient`, `RateLimitingChatClient`, `ProviderDiscoveryService`, Disk-First `PromptLoader`, OpenTelemetry `GlossatorDiagnostics` |
+| **`Glossator.App`** | `net10.0-windows` | **Glossator Studio** — `WPF-UI 4.3.0` Fluent Koyu/Aydınlık masaüstü uygulaması, 6 sayfa, sürükle-bırak kitap açma, canlı günlük çekmecesi, anlık telemetri |
+| **`Glossator.Cli`** | `net10.0` | Platform bağımsız (Windows/Linux/macOS) headless çeviri ve `Spectre.Console.Cli` sözlük yönetim aracı |
+| **`Glossator.Tests`** | `net10.0-windows` | **42 test dosyasında 458 birim/entegrasyon testi** (`xUnit 2.9.3`) |
 
 ---
 
-## Farklı Teknik ve Bilimsel Alanlara Uyarlama (Multi-Domain Adaptation)
+## Temel Yetenekler
 
-Glossator varsayılan olarak yazılım mühendisliği (O'Reilly / Manning) standartlarıyla gelir. Ancak motor tamamen alan-bağımsızdır (domain-agnostic). Farklı disiplinlerdeki bir kitabı yerelleştirmek için `Prompts/` şablonlarını birkaç dakikada uyarlayabilirsiniz:
+### 1. Glossator Studio (Win11 Fluent Masaüstü) ve Başlıca Sayfalar
+- **Kitaplığım (`LibraryView`):** Son açılan `.epub` ve açık OPF klasörlerini EPUB 2/3 kapak görseli (veya monogram fallback) kartlarıyla listeler; pencereye doğrudan `.epub` sürükle-bırak açma destekler.
+- **Aktif Kitap Masası (`BookWorkspaceView`):** Bölümleri rol (`Chapter`, `Auxiliary`, `Cover`, `Navigation`, `Index`) ve durum (**Tamamlandı `.done`**, **Yarım `.part`**, **Çevrilmemiş**) bazında yönetir; aralık seçimi (`1-5, 8`), worker sayısı (`1..8`), `Sıfırdan Çevir (--fresh)`, `Test Modu`, `Kesit Limiti` ve tek tık `EPUB Paketle` sunar.
+- **Terim Sözlüğü (`GlossaryView`):** Merkezi `~/.glossator/glossator.db` havuzunda arama, politika filtresi, satır içi düzenleme, toplu onay, açık kitaptan otomatik terim tarama ve YAML/JSON içe-dışa aktarım sağlar.
+- **Ayarlar (`SettingsView`):** EVREN, Gemini, OpenAI, Ollama, LM Studio, vLLM, Groq, OpenRouter gibi tüm OpenAI uyumlu (`/v1`) uç noktaları yönetir; **Ping**, `/models` otomatik model keşfi, `IsEditable` model seçimi, ajan bazlı 6 kademeli **Akıl Yürütme (`ReasoningEffort`: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`)** ve gömülü **Prompt Editörü** barındırır.
+- **Telemetri (`TelemetryView`):** Canlı hız (`tok/s`, `TTFT`), aktif işçi, yama/red/kurtarma sayacı, `.NET Aspire` OTLP sağlık denetimi ve `ExchangeRateService` üzerinden güncel USD/TRY maliyet tahmini sunar.
+- **Tema & Çekmece:** Başlık çubuğundan anlık **Koyu / Aydınlık (`DarkPalette` / `LightPalette` + Mica)** geçişi ve VS Code tarzı daraltılabilir alt çıktı/günlük çekmecesi içerir.
 
-### 1. Tıp ve Sağlık Bilimleri (Medical & Clinical)
-* **`StyleAnalystPrompt.md`:** Yazar kimliğini *"Klinisyen hekim, tanı ve tedavi rehberi tonu; nötr, kesin ve şüpheye yer bırakmayan tıp literatürü dili"* olarak tanımlayın.
-* **`TranslatorPrompt.md`:** 
-  * Kural 2 başlık örneklerini uyarlayın: `Myocardial Infarction (Miyokard Enfarktüsü)`, `Double-Blind Study (Çift Kör Çalışma)`.
-  * Dokunulmazlar listesine Latince anatomik isimleri (`Vena cava`, `Arteria pulmonalis`) ekleyin.
-  * Bağlamsal ayrım (Disambiguation): *"discharge"* kelimesinin elektrik deşarjı değil, **taburcu olma** veya **akıntı** olduğunu belirtin.
+### 2. Pedagojik Aşamalı Sözlük (`AlwaysEnglish` / `AlwaysTurkish` / `ProgressiveGloss`)
+Gömülü [seed_glossary.yaml](Glossator.Core/Resources/seed_glossary.yaml) dosyası **47 çekirdek terim** içerir; kullanıcı terimleri ve kitaplardan çıkarılan terimler `~/.glossator/glossator.db` (`GLOSSATOR_HOME` / `GLOSSATOR_DB` ile taşınabilir) içinde yönetilir:
 
-### 2. Biyoloji ve Yaşam Bilimleri (Genetics & Life Sciences)
-* **`StyleAnalystPrompt.md`:** *"Nature/Science hakemli dergi standardında akademik araştırmacı ve laboratuvar dili."*
-* **`TranslatorPrompt.md`:**
-  * Başlık örnekleri: `Gene Expression (Gen İfadesi)`, `Transcription Factor (Transkripsiyon Faktörü)`.
-  * Dokunulmazlar: İkili adlandırma (binomial nomenclature) tür adları italik korunur (`Escherichia coli`, `Homo sapiens`), restriksiyon enzimleri (`EcoRI`).
-  * DNA/RNA sekansları (`ATCG...`), FASTA blokları ve kimyasal formüller `<pre>`, `<code>` ve `<math>` etiketleriyle zaten kriptografik olarak kilitlenir.
+| Politika | Strateji | Okuyucu Çıktısı |
+| :--- | :--- | :--- |
+| **`AlwaysEnglish`** | Markalar, protokoller ve evrensel kısaltmalar korunur | `API`, `Docker`, `LLM` |
+| **`AlwaysTurkish`** | Yerleşik Türkçe teknik karşılık doğrudan kullanılır | `büyük dil modeli`, `önbellek` |
+| **`ProgressiveGloss`** | Bölüm içi sayaç (`TermUsageTracker`) **1. geçişte** hibrit, **2. geçiş ve sonrasında** yalın Türkçe yazar | İlk geçiş: *bağlam penceresi (context window)* → Sonrakiler: *bağlam penceresi* |
 
-### 3. Hukuk ve Mevzuat (Legal Studies)
-* **`StyleAnalystPrompt.md`:** *"Mevzuat ve içtihat diline tam sadık, bağlayıcı, normatif, yoruma kapalı formel hukuk dili."*
-* **`TranslatorPrompt.md`:** 
-  * Başlık örnekleri: `Due Process (Adil Yargılanma Hakkı)`, `Force Majeure (Mücbir Sebep)`, `Burden of Proof (İspat Yükü)`.
-  * Dokunulmazlar: Latince evrensel hukuk deyimleri (`de facto`, `prima facie`, `pacta sunt servanda`, `ultra vires`).
-  * Bağlamsal ayrım: *"action"* kelimesinin eylem değil, **dava**; *"consideration"* kelimesinin saygı değil, sözleşmedeki **ivaz/karşılık** olduğunu tanımlayın.
+### 3. KV-Cache Dostu Prompt Hiyerarşisi & Disk-First `PromptLoader`
+* `TranslatorExecutor` ve `ReviewerExecutor` sabit `[YAZAR ÜSLUP KILAVUZU]` ve sözlük kurallarını mesajın başına (**prefix**), değişen kaynak kesiti sona (**suffix**) yerleştirerek sağlayıcı prompt cache verimliliğini artırır.
+* `PromptLoader` çalışma zamanında önce `{AppContext.BaseDirectory}/Prompts/{dosyaAdı}`, ardından `{AppContext.BaseDirectory}/{dosyaAdı}` dizinlerine bakar; diskte bulunamazsa `Glossator.AI.dll` içindeki gömülü kaynağa (`EmbeddedResource`) döner (`CurrentDirectory` taranmaz). Kod derlemeden **Tıp**, **Hukuk**, **Akademi** veya **Mühendislik** alanlarına uyarlanabilir.
 
-### 4. Makine ve İnşaat Mühendisliği (Engineering Mechanics)
-* **`StyleAnalystPrompt.md`:** *"Uluslararası standartlara (ISO, DIN, ASTM) bağlı, doğrudan ve hesaplamaya dayalı analitik mühendislik üslubu."*
-* **`TranslatorPrompt.md`:**
-  * Başlık örnekleri: `Finite Element Analysis (Sonlu Elemanlar Analizi)`, `Yield Strength (Akma Mukavemeti)`.
-  * Dokunulmazlar: Standart kodları (`EN 1993-1-1`, `ASTM A36`) ve birim kısaltmaları (`MPa`, `kN/m²`).
+### 4. Kısmi Güvenlik, Kurtarma ve Token Doğruluğu
+* **`HtmlSegment.IsTranslationComplete` & `.part` İzolasyonu:** Bölümde tek bir çevrilmemiş blok kalsa dahi dosya `.done` sayılmaz, `.part` olarak izole edilir; `BookLocalizationPipeline` `DirectTranslatorFallback` ve `MicroRecovery` ile eksik blokları kurtarır.
+* **`ResilienceChatClient`:** `429`, `503`, `504`, `408`, `TimeoutException`, `SocketException` için jitter'lı üstel geri çekilme uygular; Gemini gibi sağlayıcıların kümülatif SSE `UsageContent` akışlarını delta/tekil nihai sayımla normalize eder ve gizli reasoning tokenlarını fatura metriğine doğru biçimde işler.
+* **Güvenli Kapanış:** Pencere kapatıldığında bekleyen `CheckpointStore` kuyruğu (`BoundedChannel(5000)`) ve OTLP dışa aktarıcıları kontrollü biçimde diske yazılır/boşaltılır.
 
 ---
 
-## Hızlı Başlangıç (Quickstart)
+## Hızlı Başlangıç
 
-### 1. Bağımsız Çalıştırılabilir Dosya (Kurulumsuz)
-Kullanıcının makinesinde .NET SDK veya runtime kurulu olması gerekmez. Dağıtım paketindeki `glossator.exe` dosyasını indirip doğrudan çalıştırabilirsiniz:
+### Gereksinimler
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- **Glossator Studio (`Glossator.App`)** için Windows 10/11 (`net10.0-windows`); **CLI, Core ve AI** için Windows, Linux veya macOS (`net10.0`).
+- Tercih ettiğiniz OpenAI uyumlu bir API anahtarı (EVREN, Gemini, OpenAI vb.) veya yerel **Ollama / LM Studio**.
+
+### 1. Depoyu Klonlayın ve Testleri Doğrulayın
 
 ```powershell
-# Temel Çeviri Hattını Başlat
-glossator.exe "C:\Kitaplar\Designing-Data-Intensive-Applications.epub" -o "DDIA_TR.epub" -j 3
+git clone https://github.com/chela98/Glossator.git
+cd Glossator
+dotnet test Glossator.slnx --configuration Release
 ```
 
-### 2. CLI Komutları ve Sözlük Yönetimi
+### 2. Glossator Studio'yu Başlatın (Önerilen)
 
 ```powershell
-# İnteraktif TUI Kontrol Panelini Aç
-glossator
-
-# Sözlükteki Terimleri Listele & Filtrele
-glossator glossary list --policy ProgressiveGloss --search "agent"
-
-# Yeni Terim Ekle
-glossator glossary add -e "zero-shot learning" -t "sıfır örnekli öğrenme" -p ProgressiveGloss
-
-# Sözlüğü Git-Dostu YAML Formatında Dışa Aktar
-glossator glossary export master_glossary.yaml -f yaml
-
-# Dışarıdan Sözlük İçe Aktar
-glossator glossary import team_glossary.yaml
+dotnet run --project Glossator.App/Glossator.App.csproj
 ```
 
-### 3. PDF ve Farklı Formatlar İçin Dönüşüm Kılavuzu (Calibre Entegrasyonu)
+İlk açılışta hem **Glossator Studio** hem **Glossator CLI**, [Glossator.Cli/appsettings.example.json](Glossator.Cli/appsettings.example.json) şablonunu temel ayar katmanı olarak otomatik yükler (`Evren` varsayılan aktif profil; yanında `Gemini`, `OpenAI`, yerel `Ollama` ve `Custom` hazır profilleri gelir). Sağ üstten tema tercihinizi seçebilir, **Ayarlar** sekmesinden API anahtarınızı girip (veya başka sağlayıcı seçip) **Ping** ile bağlantıyı test edebilir, **Modelleri Çek** butonuyla mevcut modelleri dropdown listelerine aktarabilirsiniz. Ayarlar repo dışında `~/.glossator/user_settings.json` dosyasında saklanır.
 
-Glossator; W3C EPUB 3 standartlarını, katı XHTML omurgasını ve DOM hiyerarşisini %100 korumak amacıyla birincil olarak **EPUB (`.epub`)** formatıyla çalışır. Ancak teknik e-kitap dünyasında PDF ihtiyacı kaçınılmazdır.
+> İsterseniz yerel ortamınız için uygulama yanında kendi `appsettings.json` dosyanızı da oluşturabilirsiniz (`.gitignore` kapsamındadır).
 
-Açık kaynaklı **Calibre** araç seti kullanılarak iki yönlü akış pratik ve kayıpsız şekilde kurulabilir:
-
-#### A. Çevrilen EPUB'ı Profesyonel PDF'e Dönüştürme
-Glossator'ın ürettiği Türkçe `.epub` dosyasını tablet, e-mürekkep okuyucu veya yazdırma için doğrudan PDF'e dönüştürebilirsiniz:
+### 3. Glossator CLI ile Headless Kullanım
 
 ```powershell
-# Calibre CLI (ebook-convert) ile kayıpsız PDF çıktısı alma
-ebook-convert "Kitap_TR.epub" "Kitap_TR.pdf" --paper-size a4 --pdf-page-numbers --margin-left 36 --margin-right 36
+# EPUB yerelleştirme (paralel 3 işçi)
+dotnet run --project Glossator.Cli -- "C:\Kitaplar\kitap.epub" -o "kitap_TR.epub" -j 3
+
+# Sadece ilk 2 kesiti test amaçlı çalıştırma (.part izole çıktı üretir)
+dotnet run --project Glossator.Cli -- "C:\Kitaplar\kitap.epub" --count 2 --test
+
+# Merkezi SQLite sözlüğünü CLI üzerinden yönetme
+dotnet run --project Glossator.Cli -- glossary list --policy ProgressiveGloss --search "agent"
+dotnet run --project Glossator.Cli -- glossary export master_glossary.yaml -f yaml
+dotnet run --project Glossator.Cli -- glossary import ./glossary.extracted.yaml
 ```
-*(Alternatif olarak Calibre Masaüstü Arayüzü: Kitaba sağ tıklayın ➔ Kitapları Dönüştür ➔ Çıktı Biçimi: PDF ➔ Tamam)*
 
-*Glossator'ın ürettiği katı XHTML kod blokları, callout kutuları ve CSS stilleri, Calibre motoru tarafından hiçbir biçimlendirme kaybı yaşanmadan kusursuz bir PDF mizanpajına dönüştürülür.*
+### 4. .NET Aspire Dashboard ile Canlı Gözlemlenebilirlik (İsteğe Bağlı)
 
-#### B. Elinizdeki PDF Kitabı EPUB'a Dönüştürüp Çevirme
-Elinizde yalnızca PDF formatında bir kitap varsa:
-1. Calibre arayüzünde PDF'i içe aktarın ve **Çıktı Biçimi: EPUB** olarak dönüştürün (veya iki sütunlu metinler için `k2pdfopt` kullanın).
-2. Üretilen `.epub` dosyasını Glossator hattına verin:
-   ```powershell
-   glossator.exe "kitap.epub" -o "kitap_tr.epub" -j 3
-   ```
-3. Çıktıyı dilerseniz yukarıdaki Calibre komutuyla yeniden PDF'e aktararak okuyun.
+```powershell
+docker run --rm -it -d -p 18888:18888 -p 4317:18889 --name aspire-dashboard mcr.microsoft.com/dotnet/aspire-dashboard:latest
+```
+
+Ardından tarayıcıdan `http://localhost:18888` adresini açarak her kesit için trace waterfall, TTFT, tok/s ve düşünme (reasoning) dahil token tüketimini izleyebilirsiniz (`OpenTelemetry:Endpoint` varsayılanı: `http://localhost:4317`).
 
 ---
 
-## Kurumsal Altyapı Özellikleri
+## Kalite ve Test Paketi
 
-* **Dinamik Sağlayıcı ve Model Eşleme:** `ActiveProvider` değiştirildiğinde ajanlar otomatik olarak hedef sağlayıcının `DefaultModel`'ine bağlanır; 404 Model Not Found hataları engellenir.
-* **Disk-First Prompt Yükleyici:** `Prompts/` klasöründeki dosyalar C# derlemesi gerektirmeden çalışma anında doğrudan diskten okunur.
-* **Localhost Bypass Koruması:** Yerel inferans uç noktalarında (`localhost`, `127.0.0.1`) API key zorunluluğu kaldırılır; terminalde gereksiz prompt kesintisi yaşanmaz.
-* **KV-Cache Prefix Hiyerarşisi:** Sistem mesajı ve bölüm üslup rehberi en başa alınarak prompt caching verimi maksimize edilir (%40+ gecikme ve maliyet tasarrufu).
-* **TokenBucketRateLimiter:** Kurumsal API kota sınırlarını (429 Too Many Requests) saniyede ve dakikada sabit token-bucket algoritmasıyla donanımsal olarak korur.
-* **JSON Patch Sözleşmesi:** Reviewer ajanı tüm metni baştan üretmez; yalnızca değişmesi gereken blokları JSON Patch olarak döner (Token tasarrufu).
-* **OpenTelemetry Entegrasyonu:** `ActivitySource` ve `Meter` yapılarıyla her aşama (PreProcessor, Translator, Reviewer, MicroRecovery) distributed tracing standardında izlenebilir.
+- **CI Pipeline ([.github/workflows/ci.yml](.github/workflows/ci.yml)):** `windows-latest` üzerinde tam çözüm `.NET 10` Release `restore`/`build`/`test` koşar; `ubuntu-latest` üzerinde ise `Glossator.Cli` (`net10.0`) çapraz platform derlemesi doğrulanır.
+- **Release Otomasyonu ([.github/workflows/release.yml](.github/workflows/release.yml)):** `v*` tag'i ile tetiklendiğinde Windows Studio (`Glossator-Studio-win-x64.zip` + `GLOSSATOR_SMOKE_TEST=1` doğrulaması), Windows/Linux self-contained CLI paketleri (`win-x64`, `linux-x64`) ve `SHA256SUMS.txt` otomatik yayınlanır.
+- **Test Kapsamı:** `Glossator.Tests` içinde `42` test dosyasında **`458 / 458`** birim ve entegrasyon testi sıfır hata / sıfır uyarı ile geçer (`ReasoningEffortMappingTests`, `ProviderDiscoveryServiceTests`, `SettingsViewModelTests`, `BookLocalizationPipelineTests`, `CyclicTranslationWorkflowTests`, `ResilienceChatClientTests`, `SafeZipExtractorTests`, `StrictXhtmlMarkupFormatterTests` vb.).
+- **Duman Testi:** `GLOSSATOR_SMOKE_TEST=1` ortam değişkeni ile `Glossator.App.exe` Release başlangıç-kapanış sağlık kontrolü çıkış kodu `0` ile doğrulanmıştır.
 
 ---
 
-## Test ve Doğrulama
+## Kapsamlı Dokümantasyon
 
-Glossator'ın tüm çekirdek algoritmaları (XHTML entity kaçışları, single-writer eşzamanlılığı, sınır güvenli regex eşleştirmeleri, dinamik provider çözümlemesi, disk öncelikli prompt yükleyici ve prompt hiyerarşisi) kapsamlı bir birim test süitiyle doğrulanmaktadır:
-
-```bash
-dotnet test Glossator.slnx
-```
-```text
-Başarılı!  - Başarısız: 0, Başarılı: 109, Atlanan: 0, Toplam: 109, Süre: 335 ms
-```
+| Belge | İçerik |
+| :--- | :--- |
+| **[Sistem Mimarisi ve Veri Akışı](docs/ARCHITECTURE.md)** | 5 projenin bağımlılık grafiği, AST maskeleme, MAF döngüsel iş akışı, `ResilienceChatClient` ve OpenTelemetry detayları |
+| **[Studio ve CLI Kullanım Kılavuzu](docs/STUDIO_AND_CLI_GUIDE.md)** | Studio 6 sayfası, `.part`/`.done` yönetimi, CLI bayrakları, Aspire Dashboard ve Calibre PDF↔EPUB dönüşümü |
+| **[Yapılandırma, Sağlayıcılar ve Reasoning](docs/CONFIGURATION_AND_PROVIDERS.md)** | Öncelik zinciri, EVREN/Gemini/OpenAI/Ollama ayarları, Ping & `/models` keşfi, `none..xhigh` akıl yürütme ve `PromptLoader` |
+| **[EVREN AI Showcase Özeti](docs/EVREN_SHOWCASE.md)** | Hibrit sağlayıcı stratejisi ve projenin yönetici özeti |
+| **[Teknik Mülakat Hazırlık Kartı](docs/INTERVIEW_CHEATSHEET.md)** | Sistem tasarımı soru-cevapları ve kök neden mühendislik çözümleri |
+| **[GitHub Hazırlık Notları](docs/GITHUB_READINESS_NOTES.md)** | Tamamlanan kalite/yayın kapıları ve dağıtım güvenlik notları |
+| **[Uygulama Planı](plan.md)** & **[Yol Haritası](roadmap.md)** | Faz 0–8 mimari evrimi ve `v2.2+` gelecek hedefleri |
 
 ---
 
-## Lisans
+## Geliştirici & Lisans
 
-Bu proje [MIT Lisansı](LICENSE) ile lisanslanmıştır. Topluluk katkılarına ve kurumsal kullanıma tamamen açıktır.
+- **Geliştirici:** Emre Dalbudak (`@chela98`) — [GitHub](https://github.com/chela98) · [LinkedIn](https://www.linkedin.com/in/emre-dalbudak/)
+
+### Lisans
+Bu proje **[MIT Lisansı](LICENSE)** altında açık kaynak olarak sunulmaktadır.

@@ -83,5 +83,33 @@ namespace Glossator.Core.Models.Epub
         /// </summary>
         public EpubItem? NavigationItem =>
             Manifest.Values.FirstOrDefault(item => item.Role == EpubDocumentRole.Navigation);
+
+        /// <summary>
+        /// Kitabın OPF manifestine göre belirlenmiş kapak görselinin göreceli yolu (varsa).
+        /// </summary>
+        public string? CoverImageHref { get; init; }
+
+        /// <summary>
+        /// Kapak görselinin diskteki güvenli tam dosya yolunu döndürür (dosya yoksa veya geçersizse null).
+        /// </summary>
+        public string? ResolveCoverImageFullPath()
+        {
+            if (string.IsNullOrWhiteSpace(CoverImageHref) || string.IsNullOrWhiteSpace(OpfDirectory))
+                return null;
+
+            var allowedRoot = string.IsNullOrWhiteSpace(RootDirectory) ? OpfDirectory : RootDirectory;
+            var normalizedRoot = Path.GetFullPath(allowedRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            var candidate = Path.GetFullPath(Path.Combine(
+                OpfDirectory,
+                CoverImageHref.Replace('/', Path.DirectorySeparatorChar)));
+
+            if (!candidate.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return File.Exists(candidate) ? candidate : null;
+        }
     }
 }

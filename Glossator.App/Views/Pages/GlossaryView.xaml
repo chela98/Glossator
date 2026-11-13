@@ -1,0 +1,271 @@
+<UserControl x:Class="Glossator.App.Views.Pages.GlossaryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <Grid Margin="24,18,24,14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Üst Başlık ve İçe/Dışa Aktarım Aksiyonları -->
+        <Grid Grid.Row="0" Margin="0,0,0,14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel>
+                <TextBlock Text="Terim Sözlüğü" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding GlossaryCountText}"
+                           FontSize="12.5"
+                           Margin="0,3,0,0"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:Button Content="Kitaptan Tara"
+                           Icon="{ui:SymbolIcon BookSearch24}"
+                           Appearance="Secondary"
+                           Command="{Binding ImportBookTermsCommand}"
+                           Margin="0,0,6,0"/>
+                <ui:Button Content="YAML İçe"
+                           Icon="{ui:SymbolIcon ArrowDownload24}"
+                           Appearance="Secondary"
+                           Command="{Binding ImportYamlCommand}"
+                           Margin="0,0,6,0"/>
+                <ui:Button Content="YAML Dışa"
+                           Icon="{ui:SymbolIcon ArrowUpload24}"
+                           Appearance="Secondary"
+                           Command="{Binding ExportYamlCommand}"
+                           Margin="0,0,6,0"/>
+                <ui:Button ToolTip="Hatalı / mükerrer otomatik terim kayıtlarını temizle"
+                           Icon="{ui:SymbolIcon Broom24}"
+                           Appearance="Transparent"
+                           Command="{Binding CleanupObsoleteCommand}"
+                           Margin="0,0,4,0"/>
+                <ui:Button ToolTip="Veritabanından yeniden yükle"
+                           Icon="{ui:SymbolIcon ArrowSync24}"
+                           Appearance="Transparent"
+                           Command="{Binding ReloadCommand}"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- Arama ve Filtre Şeridi -->
+        <Border Grid.Row="1"
+                Background="{DynamicResource StudioCardBrush}"
+                BorderBrush="{DynamicResource StudioBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12,9"
+                Margin="0,0,0,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="180"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <ui:TextBox Grid.Column="0"
+                            PlaceholderText="İngilizce terim, Türkçe karşılık, tanım veya kitap adında ara..."
+                            Icon="{ui:SymbolIcon Search24}"
+                            Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+
+                <ComboBox Grid.Column="1"
+                          Margin="10,0,12,0"
+                          ItemsSource="{Binding PolicyFilterLabels}"
+                          SelectedIndex="{Binding SelectedPolicyFilterIndex, Mode=TwoWay}"/>
+
+                <CheckBox Grid.Column="2"
+                          Content="Sadece İncelenmemiş"
+                          IsChecked="{Binding UnreviewedOnly, Mode=TwoWay}"
+                          VerticalAlignment="Center"
+                          Margin="0,0,10,0"/>
+
+                <ui:Button Grid.Column="3"
+                           Content="Temizle"
+                           Appearance="Transparent"
+                           Padding="10,5"
+                           Command="{Binding ClearFiltersCommand}"/>
+            </Grid>
+        </Border>
+
+        <!-- Hızlı Manuel Terim Ekleme Şeridi -->
+        <Border Grid.Row="2"
+                Background="{DynamicResource StudioCardBrush}"
+                BorderBrush="{DynamicResource StudioBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12,9"
+                Margin="0,0,0,10">
+            <Grid IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <ui:TextBox Grid.Column="0"
+                            PlaceholderText="Yeni İngilizce terim (ör: Context Window)"
+                            Text="{Binding NewEnglishTerm, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            Margin="0,0,8,0"/>
+
+                <ui:TextBox Grid.Column="1"
+                            PlaceholderText="Türkçe karşılığı (opsiyonel; AlwaysEnglish için boş bırakılabilir)"
+                            Text="{Binding NewTurkishTerm, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            Margin="0,0,8,0"/>
+
+                <ComboBox Grid.Column="2"
+                          ItemsSource="{Binding PolicyValues}"
+                          SelectedItem="{Binding NewPolicy, Mode=TwoWay}"
+                          Margin="0,0,8,0"/>
+
+                <ui:Button Grid.Column="3"
+                           Content="Terim Ekle"
+                           Icon="{ui:SymbolIcon Add24}"
+                           Appearance="Primary"
+                           Command="{Binding AddTermCommand}"/>
+            </Grid>
+        </Border>
+
+        <!-- Bağlamsal Toplu İşlem Barı (Yalnızca 1+ satır seçiliyken görünür) -->
+        <Border Grid.Row="3"
+                Background="{DynamicResource StudioAccentSoftBrush}"
+                BorderBrush="{DynamicResource StudioAccentBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12,8"
+                Margin="0,0,0,10"
+                Visibility="{Binding HasSelection, Converter={StaticResource BoolToVisConverter}}">
+            <Grid IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           Text="{Binding SelectionSummaryText}"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource StudioOnAccentSoftTextBrush}"/>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:Button Content="Seçilileri Onayla"
+                               Icon="{ui:SymbolIcon Checkmark24}"
+                               Appearance="Primary"
+                               Padding="10,5"
+                               Command="{Binding BulkApproveCommand}"
+                               Margin="0,0,10,0"/>
+
+                    <ComboBox Width="155"
+                              ItemsSource="{Binding PolicyValues}"
+                              SelectedItem="{Binding SelectedBulkPolicy, Mode=TwoWay}"
+                              Margin="0,0,6,0"/>
+
+                    <ui:Button Content="İlkeyi Uygula"
+                               Appearance="Secondary"
+                               Padding="10,5"
+                               Command="{Binding BulkApplyPolicyCommand}"
+                               Margin="0,0,10,0"/>
+
+                    <ui:Button Content="Sil"
+                               Icon="{ui:SymbolIcon Delete24}"
+                               Appearance="Danger"
+                               Padding="10,5"
+                               Command="{Binding BulkDeleteCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Ana Sözlük Tablosu -->
+        <Border Grid.Row="4"
+                Background="{DynamicResource StudioCardBrush}"
+                BorderBrush="{DynamicResource StudioBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+            <Grid>
+                <DataGrid x:Name="GridGlossary"
+                          ItemsSource="{Binding FilteredTerms}"
+                          SelectionMode="Extended"
+                          SelectionChanged="GridGlossary_SelectionChanged"
+                          AutoGenerateColumns="False"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          HorizontalGridLinesBrush="{DynamicResource DataGridGridLineBrush}"
+                          Background="Transparent"
+                          BorderThickness="0"
+                          RowHeight="36"
+                          AlternatingRowBackground="{DynamicResource DataGridAlternatingRowBrush}"
+                          IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="İngilizce Terim"
+                                            Binding="{Binding EnglishTerm}"
+                                            Width="1.2*"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="Türkçe Karşılık"
+                                            Binding="{Binding TurkishTerm, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                            Width="1.2*"/>
+
+                        <DataGridTemplateColumn Header="İlke (Policy)" Width="160">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <ComboBox ItemsSource="{Binding DataContext.PolicyValues, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                              SelectedItem="{Binding Policy, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              FontSize="12"
+                                              Padding="6,2"
+                                              VerticalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <DataGridTemplateColumn Header="Onaylı" Width="70">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <CheckBox IsChecked="{Binding IsReviewed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+
+                        <DataGridTextColumn Header="Kaynak Kitap"
+                                            Binding="{Binding SourceBook}"
+                                            Width="1*"
+                                            IsReadOnly="True"/>
+
+                        <DataGridTextColumn Header="İngilizce Tanım"
+                                            Binding="{Binding EnglishDefinition}"
+                                            Width="1.5*"
+                                            IsReadOnly="True"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <StackPanel HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Visibility="{Binding HasNoFilteredTerms, Converter={StaticResource BoolToVisConverter}}">
+                    <ui:SymbolIcon Symbol="Book24" FontSize="28" Opacity="0.6" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Filtreye uygun terim bulunamadı."
+                               Margin="0,8,0,0"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Alt İnce Kayıt Durumu -->
+        <TextBlock Grid.Row="5"
+                   Text="{Binding SaveStatusText}"
+                   FontSize="11.5"
+                   Margin="2,8,0,0"
+                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+    </Grid>
+</UserControl>

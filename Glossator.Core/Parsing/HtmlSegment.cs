@@ -35,6 +35,35 @@ public class HtmlSegment
     }
 
     /// <summary>
+    /// Segmentin çevirisinin tamamlanmış sayılabilmesi için boş olmadığını ve ya hedef dilde farklılaştığını
+    /// ya da doğal olarak aynı kalması beklenen teknik/iletişim/kurum/kitap meta verisi veya marka adı olduğunu doğrular.
+    /// </summary>
+    public bool IsTranslationComplete(string? bookTitle = null, string? bookAuthor = null)
+    {
+        if (string.IsNullOrWhiteSpace(TranslatedText))
+        {
+            return false;
+        }
+
+        if (IsPureTechnicalOrPlaceholder())
+        {
+            return true;
+        }
+
+        var maskedVisible = DomTreeWalkerMasker.ExtractVisibleText(MaskedText);
+        var translatedVisible = DomTreeWalkerMasker.ExtractVisibleText(TranslatedText);
+
+        if (!string.Equals(TranslatedText.Trim(), MaskedText.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(translatedVisible, maskedVisible, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return DomTreeWalkerMasker.MatchesBookMetadata(maskedVisible, bookTitle, bookAuthor) ||
+               DomTreeWalkerMasker.IsBrandOrProperEntityPhrase(maskedVisible);
+    }
+
+    /// <summary>
     /// DOM ağacında özel düğüm değişimi gereken karmaşık yapılar (örn. alt listeler içeren li) için özel değiştirme aksiyonu.
     /// Null ise varsayılan olarak DomElement.InnerHtml güncellenir.
     /// </summary>

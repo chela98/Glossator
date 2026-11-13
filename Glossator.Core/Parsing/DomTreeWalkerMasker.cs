@@ -22,6 +22,50 @@ public sealed partial class DomTreeWalkerMasker
     [GeneratedRegex(@"<[^>]+>|&[a-zA-Z0-9#]+;", RegexOptions.IgnoreCase)]
     private static partial Regex HtmlTagOrEntityRegex();
 
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceCollapseRegex();
+
+    [GeneratedRegex(@"^(?:P\.?\s*O\.?\s*Box|Post\s+Office\s+Box)\s+\d[\w\-]*$", RegexOptions.IgnoreCase)]
+    private static partial Regex PoBoxAddressRegex();
+
+    [GeneratedRegex(@"^(?:\p{Lu}[\p{L}'’.\-]+(?:\s+\p{Lu}[\p{L}'’.\-]+){0,3},\s*\p{Lu}{2,3}\s+\d{4,6}(?:-\d{4})?|\p{Lu}[\p{L}'’.\-]+(?:\s+\p{Lu}[\p{L}'’.\-]+){0,2},\s*(?:\p{Lu}{2}\s+)?[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})$")]
+    private static partial Regex CityPostalAddressRegex();
+
+    [GeneratedRegex(@"\s*(?:,|;|&|\band\b)\s*", RegexOptions.IgnoreCase)]
+    private static partial Regex AuthorSeparatorRegex();
+
+    [GeneratedRegex(@"\s*\([^)]*\)\s*$")]
+    private static partial Regex TrailingParentheticalRegex();
+
+    private static readonly HashSet<string> LegalEntitySuffixes = new(StringComparer.Ordinal)
+    {
+        "Inc", "INC", "LLC", "Ltd", "LTD", "Corp", "CORP", "Co", "GmbH", "LLP", "PLLC", "AG", "LP", "Pty", "SpA", "SRL", "A.Ş"
+    };
+
+    private static readonly HashSet<string> EntityConnectors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "&", "and", "of", "the", "for", "de", "la", "van", "von", "et", "ve"
+    };
+
+    private static readonly HashSet<string> AddressDesignators = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Street", "St", "Avenue", "Ave", "Boulevard", "Blvd", "Road", "Rd",
+        "Circle", "Cir", "Drive", "Dr", "Lane", "Ln", "Court", "Ct",
+        "Way", "Place", "Pl", "Plaza", "Square", "Sq", "Highway", "Hwy",
+        "Parkway", "Pkwy", "Terrace", "Ter", "Suite", "Ste", "Apt", "Unit",
+        "Floor", "Fl", "Room", "Rm"
+    };
+
+    private static readonly HashSet<string> PersonNameSuffixes = new(StringComparer.Ordinal)
+    {
+        "Jr", "Sr", "II", "III", "IV", "Ph.D", "PhD", "M.D", "MD"
+    };
+
+    private static readonly HashSet<string> AbbreviationTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Inc.", "Ltd.", "Co.", "Corp.", "Jr.", "Sr.", "St.", "Ave.", "Rd.", "Blvd.", "Dr.", "Ste.", "Ph.D.", "M.D.", "P.O."
+    };
+
     // Tek kelimelik olduğunda dahi mutlaka Türkçeye çevrilmesi gereken genel İngilizce yapısal başlık ve terimler
     private static readonly HashSet<string> TranslatableSingleWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -53,18 +97,40 @@ public sealed partial class DomTreeWalkerMasker
         });
     }
 
+    internal static string ExtractVisibleText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+        var withoutPlaceholders = FuzzyPlaceholderRegex().Replace(text, " ");
+        var stripped = HtmlTagOrEntityRegex().Replace(withoutPlaceholders, " ");
+        return WhitespaceCollapseRegex().Replace(stripped, " ").Trim();
+    }
+
+    internal static string NormalizeComparableText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+        return WhitespaceCollapseRegex().Replace(value.Trim(), " ")
+            .Replace('’', '\'')
+            .Replace('‘', '\'')
+            .Replace('“', '"')
+            .Replace('”', '"')
+            .Replace('–', '-')
+            .Replace('—', '-')
+            .Trim();
+    }
+
     /// <summary>
     /// Verilen metnin yalnızca yer tutuculardan (⟦PH_xxxxxx⟧), HTML etiketlerinden, sayılardan, boşluklardan,
-    /// noktalama işaretlerinden veya çevrilmemesi doğal olan tek kelimelik özel ürün/teknoloji adlarından (örn: Cognee, Mem0, Zep, Neo4j)
+    /// noktalama işaretlerinden, e-posta/URL/alan adlarından, yasal kuruluş veya açık adres satırlarından
+    /// ya da çevrilmemesi doğal olan tek kelimelik özel ürün/teknoloji adlarından (örn: Cognee, Mem0, Zep, Neo4j)
     /// oluşup oluşmadığını kontrol eder.
     /// </summary>
     public static bool IsPureTechnicalOrPlaceholder(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return true;
 
-        var withoutPlaceholders = FuzzyPlaceholderRegex().Replace(text, " ");
-        var visibleText = HtmlTagOrEntityRegex().Replace(withoutPlaceholders, " ").Trim();
-
+        var visibleText = ExtractVisibleText(text);
         if (string.IsNullOrWhiteSpace(visibleText)) return true;
 
         var letterCount = 0;
@@ -78,20 +144,300 @@ public sealed partial class DomTreeWalkerMasker
 
         if (letterCount < 2) return true;
 
-        // Eğer görünür metin boşluk içermeyen tek bir kelimeyse (örn: "Cognee", "Mem0", "Zep", "Neo4j", "SPARQL"):
-        // Genel İngilizce başlık kelimelerinden biri değilse ve büyük harfle başlıyorsa veya rakam/sembol içeriyorsa
-        // özel isim / teknik tanımlayıcı kabul edilir.
+        // Eğer görünür metin boşluk içermeyen tek bir kelimeyse (örn: "Cognee", "Mem0", "Zep", "support@oreilly.com"):
+        // Genel İngilizce başlık kelimelerinden biri değilse ve büyük harf, rakam/sembol veya iç nokta içeriyorsa
+        // özel isim / e-posta / alan adı / teknik tanımlayıcı kabul edilir.
         if (!visibleText.Any(char.IsWhiteSpace))
         {
             var cleanWord = visibleText.Trim('.', ',', ':', ';', '-', '–', '—', '(', ')', '[', ']', '"', '\'', '“', '”');
             if (!string.IsNullOrEmpty(cleanWord) && !TranslatableSingleWords.Contains(cleanWord))
             {
-                bool hasDigitOrSymbol = cleanWord.Any(c => char.IsDigit(c) || c is '_' or '/' or '+' or '#');
+                bool hasDigitOrSymbol = cleanWord.Any(c => char.IsDigit(c) || c is '_' or '/' or '\\' or '+' or '#' or '@' or ':');
+                bool hasInternalDot = cleanWord.Contains('.');
                 bool startsWithUpper = char.IsUpper(cleanWord[0]);
-                if (hasDigitOrSymbol || startsWithUpper)
+                if (hasDigitOrSymbol || hasInternalDot || startsWithUpper)
                 {
                     return true;
                 }
+            }
+        }
+
+        if (IsContactAddressOrLegalEntity(visibleText))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static bool MatchesBookMetadata(string visibleText, string? bookTitle, string? bookAuthor)
+    {
+        var candidate = NormalizeComparableText(visibleText).Trim('.', ':', ' ');
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(bookTitle))
+        {
+            var normalizedTitle = NormalizeComparableText(bookTitle).Trim('.', ':', ' ');
+            if (MatchesTitleVariant(candidate, normalizedTitle))
+            {
+                return true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(bookAuthor))
+        {
+            var normalizedAuthor = NormalizeComparableText(bookAuthor).Trim('.', ':', ' ');
+            if (string.Equals(candidate, normalizedAuthor, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            foreach (var part in AuthorSeparatorRegex().Split(normalizedAuthor))
+            {
+                var trimmed = part.Trim();
+                if (trimmed.Length >= 3 && string.Equals(candidate, trimmed, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    internal static bool IsBrandOrProperEntityPhrase(string visibleText)
+    {
+        if (string.IsNullOrWhiteSpace(visibleText) || visibleText.EndsWith('?') || visibleText.EndsWith('!'))
+        {
+            return false;
+        }
+
+        var tokens = visibleText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length is < 2 or > 6)
+        {
+            return false;
+        }
+
+        bool hasBrandOrNameSignature = false;
+
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            var raw = tokens[i];
+            if (HasMidSentencePeriod(raw, isLastToken: i == tokens.Length - 1))
+            {
+                return false;
+            }
+
+            var clean = raw.Trim('.', ',', ':', ';', '(', ')', '[', ']', '"', '\'', '“', '”');
+            if (string.IsNullOrEmpty(clean))
+            {
+                return false;
+            }
+
+            if (TranslatableSingleWords.Contains(clean))
+            {
+                return false;
+            }
+
+            if (i > 0 && EntityConnectors.Contains(clean))
+            {
+                continue;
+            }
+
+            if (!char.IsUpper(clean[0]) && !char.IsDigit(clean[0]))
+            {
+                return false;
+            }
+
+            if (HasBrandTokenSignature(clean) || (i == tokens.Length - 1 && PersonNameSuffixes.Contains(clean)))
+            {
+                hasBrandOrNameSignature = true;
+            }
+        }
+
+        return hasBrandOrNameSignature;
+    }
+
+    private static bool MatchesTitleVariant(string candidate, string normalizedTitle)
+    {
+        if (string.Equals(candidate, normalizedTitle, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var withoutSuffix = TrailingParentheticalRegex().Replace(normalizedTitle, string.Empty).Trim();
+        if (withoutSuffix.Length >= 2 && string.Equals(candidate, withoutSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var colonIdx = withoutSuffix.IndexOf(':');
+        if (colonIdx > 1)
+        {
+            var mainTitle = withoutSuffix[..colonIdx].Trim();
+            if (mainTitle.Length >= 2 && string.Equals(candidate, mainTitle, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsContactAddressOrLegalEntity(string visibleText)
+    {
+        if (visibleText.EndsWith('?') || visibleText.EndsWith('!'))
+        {
+            return false;
+        }
+
+        if (PoBoxAddressRegex().IsMatch(visibleText) || CityPostalAddressRegex().IsMatch(visibleText))
+        {
+            return true;
+        }
+
+        var tokens = visibleText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length is < 2 or > 10)
+        {
+            return false;
+        }
+
+        return IsLegalEntityName(tokens) || IsStreetAddress(tokens);
+    }
+
+    private static bool IsLegalEntityName(string[] tokens)
+    {
+        if (tokens.Length > 8)
+        {
+            return false;
+        }
+
+        var lastClean = tokens[^1].Trim('.', ',', ';', ')', ']');
+        if (!LegalEntitySuffixes.Contains(lastClean))
+        {
+            return false;
+        }
+
+        bool hasAlphabeticWord = false;
+        for (int i = 0; i < tokens.Length - 1; i++)
+        {
+            var raw = tokens[i];
+            if (HasMidSentencePeriod(raw, isLastToken: false))
+            {
+                return false;
+            }
+
+            var clean = raw.Trim('.', ',', ';', '(', ')', '"', '\'', '“', '”');
+            if (string.IsNullOrEmpty(clean))
+            {
+                return false;
+            }
+
+            if (EntityConnectors.Contains(clean))
+            {
+                continue;
+            }
+
+            if (!char.IsUpper(clean[0]) && !char.IsDigit(clean[0]))
+            {
+                return false;
+            }
+
+            if (clean.Any(char.IsLetter))
+            {
+                hasAlphabeticWord = true;
+            }
+        }
+
+        return hasAlphabeticWord;
+    }
+
+    private static bool IsStreetAddress(string[] tokens)
+    {
+        var first = tokens[0];
+        // "1. Chapter Overview" gibi numaralı başlık/liste öğelerini ele
+        if (first.EndsWith('.') || !char.IsDigit(first[0]))
+        {
+            return false;
+        }
+
+        bool hasAddressDesignator = false;
+        int numericTokenCount = 0;
+
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            var raw = tokens[i];
+            if (HasMidSentencePeriod(raw, isLastToken: i == tokens.Length - 1))
+            {
+                return false;
+            }
+
+            var clean = raw.Trim('.', ',', ';', '#', '(', ')');
+            if (string.IsNullOrEmpty(clean))
+            {
+                return false;
+            }
+
+            if (clean.Any(char.IsDigit))
+            {
+                numericTokenCount++;
+            }
+
+            if (AddressDesignators.Contains(clean))
+            {
+                hasAddressDesignator = true;
+                continue;
+            }
+
+            if (i > 0 && EntityConnectors.Contains(clean))
+            {
+                continue;
+            }
+
+            if (!char.IsUpper(clean[0]) && !char.IsDigit(clean[0]))
+            {
+                return false;
+            }
+        }
+
+        return hasAddressDesignator || numericTokenCount >= 2;
+    }
+
+    private static bool HasMidSentencePeriod(string rawToken, bool isLastToken)
+    {
+        if (rawToken.EndsWith('?') || rawToken.EndsWith('!'))
+        {
+            return true;
+        }
+
+        if (isLastToken || !rawToken.EndsWith('.'))
+        {
+            return false;
+        }
+
+        if (AbbreviationTokens.Contains(rawToken))
+        {
+            return false;
+        }
+
+        // Tek harfli orta ad kısaltmalarına izin ver (örn. "Paula L. Fleming")
+        var stem = rawToken.TrimEnd('.');
+        return stem.Length > 1;
+    }
+
+    private static bool HasBrandTokenSignature(string cleanToken)
+    {
+        for (int i = 1; i < cleanToken.Length; i++)
+        {
+            var prev = cleanToken[i - 1];
+            var curr = cleanToken[i];
+            if ((char.IsLower(prev) && char.IsUpper(curr)) ||
+                ((prev is '\'' or '’') && char.IsUpper(curr)))
+            {
+                return true;
             }
         }
 

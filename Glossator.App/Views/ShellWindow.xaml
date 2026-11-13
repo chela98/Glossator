@@ -1,0 +1,502 @@
+<ui:FluentWindow x:Class="Glossator.App.Views.ShellWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:controls="clr-namespace:Glossator.App.Views.Controls"
+                 xmlns:pages="clr-namespace:Glossator.App.Views.Pages"
+                 xmlns:vm="clr-namespace:Glossator.App.ViewModels"
+                 Title="Glossator Studio — EPUB Teknik Yerelleştirme"
+                 Icon="pack://application:,,,/Assets/glossator.ico"
+                 Width="1360"
+                 Height="860"
+                 MinWidth="1040"
+                 MinHeight="720"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round"
+                 AllowDrop="True"
+                 PreviewDragOver="ShellWindow_PreviewDragOver"
+                 PreviewDrop="ShellWindow_PreviewDrop"
+                 Loaded="ShellWindow_Loaded"
+                 Closing="ShellWindow_Closing">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="38"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 1. Özel Fluent Üst Başlık Çubuğu -->
+        <ui:TitleBar Grid.Row="0"
+                     Height="38"
+                     ShowMaximize="True"
+                     ShowMinimize="True">
+            <ui:TitleBar.Header>
+                <StackPanel Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="12,0,0,0"
+                            IsHitTestVisible="False">
+                    <controls:GlossatorLogoControl Width="20" Height="20" Margin="0,0,8,0"/>
+                    <TextBlock Text="Glossator Studio"
+                               FontSize="12.5"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    <Border Background="{DynamicResource StudioCardBrush}"
+                            BorderBrush="{DynamicResource StudioBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="8,2"
+                            Margin="10,0,0,0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="EPUB Teknik Yerelleştirme"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </Border>
+                </StackPanel>
+            </ui:TitleBar.Header>
+            <ui:TitleBar.TrailingContent>
+                <ui:Button Command="{Binding ToggleThemeCommand}"
+                           ToolTip="{Binding ThemeToggleToolTip}"
+                           Appearance="Transparent"
+                           Padding="8,4"
+                           Margin="0,0,6,0"
+                           VerticalAlignment="Center"
+                           WindowChrome.IsHitTestVisibleInChrome="True">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:SymbolIcon Symbol="{Binding ThemeToggleIcon}" FontSize="14" Margin="0,0,6,0"/>
+                        <TextBlock Text="{Binding ThemeToggleLabel}" FontSize="11.5" FontWeight="SemiBold"/>
+                    </StackPanel>
+                </ui:Button>
+            </ui:TitleBar.TrailingContent>
+        </ui:TitleBar>
+
+        <!-- 2. Ana Master-Detail Alanı -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="264"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- SOL KENAR ÇUBUĞU (Navigasyon + Son Kitaplar + Geliştirici Footer) -->
+            <Border Grid.Column="0"
+                    Background="{DynamicResource StudioSidebarBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="0,1,1,0"
+                    Padding="12,12,12,10">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Ana Sayfalar Navigasyonu -->
+                    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Library}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Library24" FontSize="15" Margin="0,0,10,0"/>
+                                <TextBlock Text="Kitaplığım" FontSize="13"/>
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Workspace}">
+                            <Grid>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="BookOpen24" FontSize="15" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Aktif Kitap Masası" FontSize="13"/>
+                                </StackPanel>
+                                <Ellipse Width="7" Height="7"
+                                         HorizontalAlignment="Right"
+                                         VerticalAlignment="Center"
+                                         Fill="{DynamicResource StudioAccentBrush}"
+                                         Visibility="{Binding BookWorkspace.HasActiveBook, Converter={StaticResource BoolToVisConverter}}"/>
+                            </Grid>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Glossary}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Book24" FontSize="15" Margin="0,0,10,0"/>
+                                <TextBlock Text="Terim Sözlüğü" FontSize="13"/>
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Settings}">
+                            <Grid>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="Settings24" FontSize="15" Margin="0,0,10,0"/>
+                                    <TextBlock Text="Ayarlar" FontSize="13"/>
+                                </StackPanel>
+                                <Ellipse Width="7" Height="7"
+                                         HorizontalAlignment="Right"
+                                         VerticalAlignment="Center"
+                                         Fill="#F59E0B"
+                                         Visibility="{Binding Settings.IsSettingsDirty, Converter={StaticResource BoolToVisConverter}}"/>
+                            </Grid>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Telemetry}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Pulse24" FontSize="15" Margin="0,0,10,0"/>
+                                <TextBlock Text="Telemetri" FontSize="13"/>
+                            </StackPanel>
+                        </RadioButton>
+
+                        <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
+                                     GroupName="MainNavGroup"
+                                     IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=About}">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Info24" FontSize="15" Margin="0,0,10,0"/>
+                                <TextBlock Text="Hakkımda" FontSize="13"/>
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+
+                    <!-- Son Kitaplar Başlık Satırı -->
+                    <Grid Grid.Row="1" Margin="4,0,2,6">
+                        <TextBlock Text="SON KİTAPLAR"
+                                   FontSize="10.5"
+                                   FontWeight="Bold"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <ui:Button ToolTip="Yeni EPUB dosyası aç..."
+                                   Icon="{ui:SymbolIcon Add24}"
+                                   Appearance="Transparent"
+                                   Padding="5,3"
+                                   HorizontalAlignment="Right"
+                                   Command="{Binding Library.OpenBookFileCommand}"/>
+                    </Grid>
+
+                    <!-- Son Kitaplar Hızlı Geçiş Listesi -->
+                    <ScrollViewer Grid.Row="2"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <Grid>
+                            <ItemsControl ItemsSource="{Binding Library.RecentBooks}"
+                                          Visibility="{Binding Library.HasRecentBooks, Converter={StaticResource BoolToVisConverter}}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource SidebarRecentBookButtonStyle}"
+                                                Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Command="{Binding DataContext.Library.OpenBookEntryCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="{Binding Title}">
+                                            <Button.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Masada Aç"
+                                                              Command="{Binding PlacementTarget.Tag.Library.OpenBookEntryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <MenuItem Header="Klasörü Aç"
+                                                              Command="{Binding PlacementTarget.Tag.Library.OpenBookFolderCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Listeden Kaldır"
+                                                              Command="{Binding PlacementTarget.Tag.Library.RemoveBookEntryCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                </ContextMenu>
+                                            </Button.ContextMenu>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="26"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <controls:BookCoverControl Grid.Column="0"
+                                                                           Width="26" Height="36"
+                                                                           CoverPath="{Binding ValidCoverImagePath}"
+                                                                           Monogram="{Binding FallbackMonogram}"
+                                                                           FallbackHex="{Binding FallbackBackgroundHex}"
+                                                                           CoverCornerRadius="4"
+                                                                           MonogramFontSize="10"/>
+
+                                                <StackPanel Grid.Column="1" Margin="9,0,0,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontSize="12"
+                                                               FontWeight="Medium"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                    <TextBlock FontSize="10.5"
+                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                                        <Run Text="{Binding TranslatedChapters, Mode=OneWay}"/>
+                                                        <Run Text="/"/>
+                                                        <Run Text="{Binding TotalChapters, Mode=OneWay}"/>
+                                                        <Run Text=" · %"/>
+                                                        <Run Text="{Binding ProgressPercentage, Mode=OneWay, StringFormat='{}{0:F0}'}"/>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <TextBlock Text="Henüz kayıtlı kitap yok."
+                                       FontSize="11.5"
+                                       Margin="6,8"
+                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                       Visibility="{Binding Library.HasRecentBooks, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                        </Grid>
+                    </ScrollViewer>
+
+                    <!-- Sabit Alt Geliştirici Portfolyo Alanı -->
+                    <Border Grid.Row="3"
+                            Margin="0,10,0,0"
+                            Padding="10,9"
+                            Background="{DynamicResource StudioCardBrush}"
+                            BorderBrush="{DynamicResource StudioBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource StudioAccentBrush}">
+                                    <TextBlock Text="ED" FontSize="10" FontWeight="Bold" Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Emre Dalbudak" FontSize="12" FontWeight="SemiBold"/>
+                                    <TextBlock Text="@chela98" FontSize="10.5" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button Style="{StaticResource LinkedInActionButtonStyle}"
+                                        Width="28"
+                                        Height="28"
+                                        Padding="0"
+                                        ToolTip="LinkedIn · emre-dalbudak"
+                                        Command="{Binding About.OpenLinkedInCommand}"
+                                        Margin="0,0,6,0">
+                                    <Path Data="{StaticResource LinkedInLogoGeometry}"
+                                          Stretch="Uniform"
+                                          Width="13"
+                                          Height="13"
+                                          Fill="White"/>
+                                </Button>
+                                <Button Style="{StaticResource GitHubActionButtonStyle}"
+                                        Width="28"
+                                        Height="28"
+                                        Padding="0"
+                                        ToolTip="GitHub · @chela98"
+                                        Command="{Binding About.OpenGitHubCommand}">
+                                    <Path Data="{StaticResource GitHubLogoGeometry}"
+                                          Stretch="Uniform"
+                                          Width="14"
+                                          Height="14"
+                                          Fill="#F0F6FC"/>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- SAĞ ANA ÇALIŞMA TUVALİ -->
+            <Border x:Name="RootLayoutMarker"
+                    Grid.Column="1"
+                    Background="{DynamicResource StudioCanvasBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Üst Bildirim Şeridi (InfoBar) -->
+                    <ui:InfoBar Grid.Row="0"
+                                Margin="20,12,20,0"
+                                Title="{Binding Banner.Title}"
+                                Message="{Binding Banner.Message}"
+                                Severity="{Binding Banner.Severity}"
+                                IsOpen="{Binding Banner.IsOpen, Mode=TwoWay}"
+                                IsClosable="True">
+                        <ui:Button Content="{Binding Banner.ActionLabel}"
+                                   Command="{Binding Banner.ActionCommand}"
+                                   Appearance="Secondary"
+                                   Visibility="{Binding Banner.HasAction, Converter={StaticResource BoolToVisConverter}}"/>
+                    </ui:InfoBar>
+
+                    <!-- Aktif Sayfa Hostu -->
+                    <Grid Grid.Row="1">
+                        <pages:LibraryView DataContext="{Binding Library}"
+                                           Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Library}"/>
+
+                        <pages:BookWorkspaceView DataContext="{Binding BookWorkspace}"
+                                                 Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Workspace}"/>
+
+                        <pages:GlossaryView DataContext="{Binding Glossary}"
+                                            Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Glossary}"/>
+
+                        <pages:SettingsView DataContext="{Binding Settings}"
+                                            Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Settings}"/>
+
+                        <pages:TelemetryView DataContext="{Binding Telemetry}"
+                                             Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=Telemetry}"/>
+
+                        <pages:AboutView DataContext="{Binding About}"
+                                         Visibility="{Binding DataContext.CurrentPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource EnumToVisConverter}, ConverterParameter=About}"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- 3. VS CODE TARZI AÇILIR-KAPANIR ALT ÇIKTI & TELEMETRİ ÇEKMECESİ -->
+        <Border Grid.Row="2"
+                Background="{DynamicResource StudioSidebarBrush}"
+                BorderBrush="{DynamicResource StudioBorderBrush}"
+                BorderThickness="0,1,0,0">
+            <StackPanel>
+                <!-- Kalıcı 36px Durum Çubuğu -->
+                <Grid Height="36" Margin="14,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:Button Command="{Binding ToggleOutputDrawerCommand}"
+                                   Appearance="Transparent"
+                                   Padding="8,4"
+                                   ToolTip="Alt Çıktı ve Günlük Panelini Aç/Kapat">
+                            <StackPanel Orientation="Horizontal">
+                                <ui:SymbolIcon Symbol="Code24" FontSize="14" Margin="0,0,6,0"
+                                               Foreground="{DynamicResource StudioAccentBrush}"/>
+                                <TextBlock Text="Çıktı &amp; Günlük" FontSize="12" FontWeight="SemiBold"/>
+                            </StackPanel>
+                        </ui:Button>
+
+                        <Border Width="1" Height="16" Background="{DynamicResource StudioBorderBrush}" Margin="10,0"/>
+
+                        <ProgressBar Width="96"
+                                     Height="5"
+                                     Maximum="100"
+                                     Value="{Binding OverallPercentage, Mode=OneWay}"
+                                     Visibility="{Binding ShowProgressBar, Converter={StaticResource BoolToVisConverter}}"
+                                     Margin="0,0,8,0"/>
+
+                        <TextBlock Text="{Binding OverallPercentageText}"
+                                   FontSize="11.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource StudioAccentBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"
+                                   Visibility="{Binding ShowProgressBar, Converter={StaticResource BoolToVisConverter}}"/>
+
+                        <TextBlock Text="{Binding LiveOperationText}"
+                                   FontSize="11.5"
+                                   MaxWidth="380"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   ToolTip="{Binding LiveOperationText}"/>
+                    </StackPanel>
+
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Telemetry.LiveTelemetryStripText}"
+                               FontSize="11"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Right"
+                               Margin="12,0"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               ToolTip="{Binding Telemetry.LiveTelemetryStripText}"/>
+
+                    <ui:Button Grid.Column="2"
+                               Content="Durdur"
+                               Icon="{ui:SymbolIcon Stop24}"
+                               Appearance="Danger"
+                               Padding="10,4"
+                               Margin="0,0,8,0"
+                               Command="{Binding StopTranslationCommand}"
+                               Visibility="{Binding IsTranslating, Converter={StaticResource BoolToVisConverter}}"/>
+
+                    <ui:Button Grid.Column="3"
+                               Command="{Binding ToggleOutputDrawerCommand}"
+                               Appearance="Transparent"
+                               Padding="6,4"
+                               ToolTip="Çıktı Çekmecesini Genişlet/Daralt">
+                        <Grid>
+                            <ui:SymbolIcon Symbol="ChevronUp24" FontSize="14"
+                                           Visibility="{Binding IsOutputDrawerExpanded, Converter={StaticResource InverseBoolToVisConverter}}"/>
+                            <ui:SymbolIcon Symbol="ChevronDown24" FontSize="14"
+                                           Visibility="{Binding IsOutputDrawerExpanded, Converter={StaticResource BoolToVisConverter}}"/>
+                        </Grid>
+                    </ui:Button>
+                </Grid>
+
+                <!-- Açılabilir Günlük Çekmecesi (210px) -->
+                <Border Height="210"
+                        Background="{DynamicResource StudioTerminalBrush}"
+                        BorderBrush="{DynamicResource StudioBorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="14,8,14,10"
+                        Visibility="{Binding IsOutputDrawerExpanded, Converter={StaticResource BoolToVisConverter}}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Grid Grid.Row="0" Margin="0,0,0,6">
+                            <TextBlock Text="CANLI AJAN GÜNLÜĞÜ (Son 300 satır)"
+                                       FontSize="10.5"
+                                       FontWeight="Bold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <ui:Button Content="Tümünü Kopyala"
+                                           Icon="{ui:SymbolIcon Copy24}"
+                                           Appearance="Transparent"
+                                           FontSize="11"
+                                           Padding="8,3"
+                                           Command="{Binding CopyAllLogsCommand}"
+                                           Margin="0,0,6,0"/>
+                                <ui:Button Content="Temizle"
+                                           Icon="{ui:SymbolIcon Delete24}"
+                                           Appearance="Transparent"
+                                           FontSize="11"
+                                           Padding="8,3"
+                                           Command="{Binding ClearLogsCommand}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <ListBox Grid.Row="1"
+                                 x:Name="LstLogs"
+                                 Tag="{Binding}"
+                                 ItemsSource="{Binding LogLines}"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 FontFamily="Cascadia Mono, Consolas"
+                                 FontSize="11.5"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                            <ListBox.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Satırı Kopyala"
+                                              Command="{Binding PlacementTarget.Tag.CopyLogLineCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                              CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
+                        </ListBox>
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <!-- 4. WPF-UI ContentDialog Overlay -->
+        <ui:ContentDialogHost x:Name="RootContentDialogHost" Grid.RowSpan="3"/>
+    </Grid>
+</ui:FluentWindow>

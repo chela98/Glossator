@@ -90,6 +90,9 @@ public static class EpubManifestReader
             }
         }
 
+        // Kapak görseli çözümleme (EPUB 3 properties="cover-image" -> EPUB 2 <meta name="cover"> -> yedek heuristik)
+        var coverImageHref = ResolveCoverImageHref(doc, manifest);
+
         var package = new EpubPackage
         {
             Title = title,
@@ -98,13 +101,51 @@ public static class EpubManifestReader
             OpfDirectory = opfDirectory,
             SourceArchivePath = sourceArchive,
             Manifest = manifest,
-            Spine = spine
+            Spine = spine,
+            CoverImageHref = coverImageHref
         };
 
         // Semantik rolleri ve başlıkları otomatik sınıflandır
         EpubDocumentClassifier.ClassifyPackage(package);
 
         return package;
+    }
+
+    private static string? ResolveCoverImageHref(XDocument doc, Dictionary<string, EpubItem> manifest)
+    {
+        static bool IsImage(EpubItem item) =>
+            item.MediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+        // 1. EPUB 3: properties tokenları içinde "cover-image"
+        foreach (var item in manifest.Values)
+        {
+            if (!IsImage(item) || string.IsNullOrWhiteSpace(item.Properties))
+                continue;
+
+            var tokens = item.Properties.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (tokens.Any(t => t.Equals("cover-image", StringComparison.OrdinalIgnoreCase)))
+                return item.Href;
+        }
+
+        // 2. EPUB 2: <meta name="cover" content="<manifest-id>" />
+        var metaCoverId = doc.Descendants()
+            .Where(e => e.Name.LocalName.Equals("meta", StringComparison.OrdinalIgnoreCase))
+            .FirstOrDefault(e => string.Equals(e.Attribute("name")?.Value, "cover", StringComparison.OrdinalIgnoreCase))
+            ?.Attribute("content")?.Value;
+
+        if (!string.IsNullOrWhiteSpace(metaCoverId) &&
+            manifest.TryGetValue(metaCoverId.Trim(), out var metaItem) &&
+            IsImage(metaItem))
+        {
+            return metaItem.Href;
+        }
+
+        // 3. Yedek: İd veya dosya adında "cover" geçen görsel öğe
+        return manifest.Values
+            .FirstOrDefault(item => IsImage(item) &&
+                (item.Id.Contains("cover", StringComparison.OrdinalIgnoreCase) ||
+                 Path.GetFileName(item.Href).Contains("cover", StringComparison.OrdinalIgnoreCase)))
+            ?.Href;
     }
 
     /// <summary>

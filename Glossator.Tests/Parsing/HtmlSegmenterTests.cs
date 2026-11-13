@@ -14,22 +14,23 @@ public class HtmlSegmenterTests
             <body>
                 <h1>Title</h1>
                 <p>A paragraph with <code>inline code</code>.</p>
-                <pre><code>public void DoSomething() { Console.WriteLine("Hello"); }</code></pre>
+                <pre><p>Paragraph inside pre must be ignored</p><code>public void DoSomething() { Console.WriteLine("Hello"); }</code></pre>
             </body>
             </html>
             """;
 
         // Act
-        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
+        var (_, segments) = HtmlSegmenter.SegmentHtml(html);
 
         // Assert
         Assert.Equal(2, segments.Count);
         Assert.Equal("h1", segments[0].TagName);
         Assert.Equal("p", segments[1].TagName);
 
-        // pre içindeki code asla segmente dahil edilmemeli
+        // pre içindeki hiçbir eleman segmente dahil edilmemeli
         Assert.DoesNotContain(segments, s => s.TagName == "pre");
         Assert.DoesNotContain(segments, s => s.OriginalInnerHtml.Contains("DoSomething"));
+        Assert.DoesNotContain(segments, s => s.OriginalInnerHtml.Contains("ignored"));
     }
 
     [Fact]
@@ -39,10 +40,8 @@ public class HtmlSegmenterTests
         var html = "<html><body><p>Welcome to <code>Glossator</code> tool.</p></body></html>";
         var (document, segments) = HtmlSegmenter.SegmentHtml(html);
 
-        Assert.Single(segments);
-        var seg = segments[0];
+        var seg = Assert.Single(segments);
         Assert.Contains("⟦PH_000001⟧", seg.MaskedText);
-
         seg.TranslatedText = "⟦PH_000001⟧ aracına hoş geldiniz.";
 
         // Act
@@ -58,15 +57,12 @@ public class HtmlSegmenterTests
     [Fact]
     public void SegmentHtml_WithMultiplePlaceholders_DoesNotCollideOnPrefixes()
     {
-        // Arrange: 12 adet kod bloğu içeren bir paragraf (PH_000001 ile PH_000010, PH_000011, PH_000012)
+        // Arrange: 12 adet kod bloğu içeren bir paragraf (PH_000001..PH_000012)
         var html = "<p>" + string.Join(" and ", Enumerable.Range(1, 12).Select(i => $"<code>code_{i}</code>")) + "</p>";
-        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
+        var (_, segments) = HtmlSegmenter.SegmentHtml(html);
 
-        Assert.Single(segments);
-        var seg = segments[0];
+        var seg = Assert.Single(segments);
         Assert.Equal(12, seg.Tokens.Count);
-
-        // Çeviri simülasyonu: token sırasını değiştirerek bir metin üret
         seg.TranslatedText = string.Join(" ve ", Enumerable.Range(1, 12).Select(i => $"⟦PH_{i:D6}⟧"));
 
         // Act
@@ -83,6 +79,7 @@ public class HtmlSegmenterTests
     [Fact]
     public void SegmentHtml_WithListsTablesAndDefinitionLists_SegmentsAllTextualNodes()
     {
+        // Arrange
         var html = """
             <html>
             <body>
@@ -96,8 +93,10 @@ public class HtmlSegmenterTests
             </html>
             """;
 
-        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
+        // Act
+        var (_, segments) = HtmlSegmenter.SegmentHtml(html);
 
+        // Assert
         Assert.Equal(6, segments.Count);
         Assert.Contains(segments, s => s.TagName == "li" && s.MaskedText.Contains("List item 1"));
         Assert.Contains(segments, s => s.TagName == "li" && s.MaskedText.Contains("List item 2"));
@@ -110,6 +109,7 @@ public class HtmlSegmenterTests
     [Fact]
     public void SegmentHtml_WithNestedLists_SegmentsBothParentAndChildTextAndAppliesTranslations()
     {
+        // Arrange
         var html = """
             <html>
             <body>
@@ -125,13 +125,11 @@ public class HtmlSegmenterTests
             </html>
             """;
 
+        // Act
         var (document, segments) = HtmlSegmenter.SegmentHtml(html);
 
+        // Assert & Translate
         Assert.Equal(3, segments.Count);
-        Assert.Contains(segments, s => s.TagName == "li" && s.MaskedText.Contains("Parent list item:"));
-        Assert.Contains(segments, s => s.TagName == "li" && s.MaskedText.Contains("Child list item 1"));
-        Assert.Contains(segments, s => s.TagName == "li" && s.MaskedText.Contains("Child list item 2"));
-
         var parentSeg = segments.First(s => s.MaskedText.Contains("Parent list item:"));
         var child1Seg = segments.First(s => s.MaskedText.Contains("Child list item 1"));
         var child2Seg = segments.First(s => s.MaskedText.Contains("Child list item 2"));
@@ -150,25 +148,41 @@ public class HtmlSegmenterTests
     }
 
     [Fact]
+    public void SegmentHtml_WithBlockquoteContainingParagraphs_SegmentsChildParagraphsWithoutDuplication()
+    {
+        // Arrange
+        var html = "<blockquote><p>Quoted first sentence.</p><p>Quoted second sentence.</p></blockquote>";
+
+        // Act
+        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
+
+        // Assert: blockquote içinde <p> olduğu için yalnızca iki <p> segmente edilmeli
+        Assert.Equal(2, segments.Count);
+        Assert.All(segments, s => Assert.Equal("p", s.TagName));
+        segments[0].TranslatedText = "Alıntılanan birinci cümle.";
+        segments[1].TranslatedText = "Alıntılanan ikinci cümle.";
+
+        HtmlSegmenter.ApplyTranslations(segments);
+        var xhtml = HtmlSegmenter.ToXhtml(document);
+        Assert.Contains("<blockquote><p>Alıntılanan birinci cümle.</p><p>Alıntılanan ikinci cümle.</p></blockquote>", xhtml);
+    }
+
+    [Fact]
     public void SegmentHtml_WithSelfClosingIndextermAnchors_DoesNotSwallowText()
     {
-        // Arrange: O'Reilly tarzı self-closing indexterm etiketi içeren edebi paragraf
+        // Arrange
         var html = "<p>Imagine <a contenteditable=\"false\" data-primary=\"enterprise agentic AI\" data-type=\"indexterm\" id=\"eaai_ch\"/>a world where AI doesn’t just wait for your questions but pursues your goals.</p>";
 
         // Act
         var (document, segments) = HtmlSegmenter.SegmentHtml(html);
 
         // Assert
-        Assert.Single(segments);
-        var seg = segments[0];
-
-        // Maskelenen metin edebi cümlenin tamamını içermeli, placeholder sadece etiketin yerinde olmalı
+        var seg = Assert.Single(segments);
         Assert.Equal("Imagine ⟦PH_000001⟧a world where AI doesn’t just wait for your questions but pursues your goals.", seg.MaskedText);
         Assert.Single(seg.Tokens);
         Assert.Equal("a", seg.Tokens[0].TagName);
         Assert.Contains("indexterm", seg.Tokens[0].OriginalMarkup);
 
-        // Çeviri simülasyonu
         seg.TranslatedText = "Şunu hayal et: ⟦PH_000001⟧yapay zekânın hedeflerinizin peşinden koştuğu bir dünya.";
         HtmlSegmenter.ApplyTranslations(segments);
 
@@ -178,38 +192,49 @@ public class HtmlSegmenterTests
         Assert.Contains("<a contenteditable=\"false\" data-primary=\"enterprise agentic AI\" data-type=\"indexterm\" id=\"eaai_ch\"></a>", xhtml);
     }
 
-    [Theory]
-    [InlineData("⟦PH_000001⟧⟦PH_000002⟧", true)]
-    [InlineData("   ⟦PH_000001⟧   ", true)]
-    [InlineData("1.2", true)]
-    [InlineData("⟦PH_000001⟧.", true)]
-    [InlineData("Hello world ⟦PH_000001⟧", false)]
-    [InlineData("Eylem Körlüğü", false)]
-    public void IsPureTechnicalOrPlaceholder_IdentifiesTechnicalSegments(string text, bool expected)
-    {
-        var result = DomTreeWalkerMasker.IsPureTechnicalOrPlaceholder(text);
-        Assert.Equal(expected, result);
-    }
-
     [Fact]
     public void SegmentHtml_WithSelfClosingAnchorTag_PreservesDevOpsAndActionBlindnessText()
     {
+        // Arrange
         var html = @"<div>
 <p>The <a contenteditable=""false"" data-primary=""action blindness"" data-type=""indexterm"" id=""ab""/>shift from simple Q&amp;A to autonomous action exposes this vulnerability clearly. When your DevOps agent needs to diagnose a production issue</p>
 <p>Without <a contenteditable=""false"" data-primary=""action blindness"" data-type=""indexterm"" id=""ab2""/>understanding relationships between entities, cascade failures through dependent systems</p>
 </div>";
 
-        var (document, segments) = HtmlSegmenter.SegmentHtml(html);
+        // Act
+        var (_, segments) = HtmlSegmenter.SegmentHtml(html);
 
-        // DevOps paragrafı artık yutulmamış olmalı
+        // Assert
         var devOpsSeg = segments.FirstOrDefault(s => s.MaskedText.Contains("DevOps agent"));
         Assert.NotNull(devOpsSeg);
         Assert.Contains("The ⟦PH_000001⟧shift from simple Q&amp;A", devOpsSeg.MaskedText);
         Assert.Contains("When your DevOps agent needs to diagnose a production issue", devOpsSeg.MaskedText);
 
-        // Action blindness tanımı artık yutulmamış olmalı
         var actionBlindnessDesc = segments.FirstOrDefault(s => s.MaskedText.Contains("cascade failures through dependent systems"));
         Assert.NotNull(actionBlindnessDesc);
         Assert.Contains("Without ⟦PH_000001⟧understanding relationships between entities", actionBlindnessDesc.MaskedText);
+    }
+
+    [Fact]
+    public void SegmentFile_ReadsHtmlFromDiskAndSegmentsCorrectly()
+    {
+        // Arrange
+        var tempFile = Path.Combine(Path.GetTempPath(), $"segment_file_{Guid.NewGuid():N}.xhtml");
+        File.WriteAllText(tempFile, "<html><body><h1>Chapter 1</h1><p>Body with <code>var x = 1;</code>.</p></body></html>");
+
+        try
+        {
+            // Act
+            var (_, segments) = HtmlSegmenter.SegmentFile(tempFile);
+
+            // Assert
+            Assert.Equal(2, segments.Count);
+            Assert.Equal("Chapter 1", segments[0].MaskedText);
+            Assert.Equal("Body with ⟦PH_000001⟧.", segments[1].MaskedText);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 }

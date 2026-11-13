@@ -12,7 +12,7 @@ namespace Glossator.Core.Data;
 /// Çoklu worker'ların eşzamanlı çeviri segmentlerini SQLite'a kilitlenme olmadan (single-writer micro-batching)
 /// yazmasını sağlayan ve okuma/silme/flush operasyonlarını tek çatı altında toplayan kalıcılık deposu.
 /// </summary>
-public sealed class CheckpointStore : IAsyncDisposable
+public sealed class CheckpointStore : IAsyncDisposable, IDisposable
 {
     private sealed record FlushCommand(TaskCompletionSource Tcs);
 
@@ -60,10 +60,10 @@ public sealed class CheckpointStore : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_isDisposed != 0, this);
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await _channel.Writer.WriteAsync(new FlushCommand(tcs), cancellationToken);
+        await _channel.Writer.WriteAsync(new FlushCommand(tcs), cancellationToken).ConfigureAwait(false);
 
         await using var registration = cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
-        await tcs.Task;
+        await tcs.Task.ConfigureAwait(false);
     }
 
     /// <summary>
@@ -326,7 +326,7 @@ public sealed class CheckpointStore : IAsyncDisposable
         _channel.Writer.TryComplete();
         try
         {
-            await _consumerTask;
+            await _consumerTask.ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -336,5 +336,12 @@ public sealed class CheckpointStore : IAsyncDisposable
         {
             _cts.Dispose();
         }
+    }
+
+    public void Dispose()
+    {
+        // UI SynchronizationContext kilitlenmesini önlemek için arka plan iş parçacığında güvenli boşaltma yap
+        Task.Run(async () => await DisposeAsync().ConfigureAwait(false))
+            .Wait(TimeSpan.FromSeconds(5));
     }
 }

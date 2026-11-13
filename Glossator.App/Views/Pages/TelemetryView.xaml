@@ -1,0 +1,162 @@
+<UserControl x:Class="Glossator.App.Views.Pages.TelemetryView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="24,18,24,16">
+        <StackPanel>
+            <StackPanel Margin="0,0,0,16">
+                <TextBlock Text="Telemetri &amp; Kur" FontSize="22" FontWeight="SemiBold"/>
+                <TextBlock Text="Canlı paralel işçi performansı, .NET Aspire OTLP kolektör bağlantısı ve döviz kuru tercihleri"
+                           FontSize="12.5"
+                           Margin="0,3,0,0"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- 6 Canlı Metrik Kartı -->
+            <UniformGrid Columns="3" Margin="0,0,0,14">
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,10,10">
+                    <StackPanel>
+                        <TextBlock Text="AKTİF İŞÇİ (WORKER)" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding ActiveWorkersText}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,10,10">
+                    <StackPanel>
+                        <TextBlock Text="TAMAMLANAN KESİT" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding SectionsTranslatedText}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="TAMAMLANAN BÖLÜM" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding ChaptersTranslatedText}" FontSize="22" FontWeight="Bold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,10,0">
+                    <StackPanel>
+                        <TextBlock Text="HIZ &amp; İLK TOKEN (TPS | TTFT)" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding SpeedAndTtftText}" FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,10,0">
+                    <StackPanel>
+                        <TextBlock Text="YAMA / RED / KURTARMA" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding QualityText}" FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="{DynamicResource StudioCardBrush}" BorderBrush="{DynamicResource StudioBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="AKIŞ TOKEN (SSE STREAM)" FontSize="11" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                        <TextBlock Text="{Binding StreamedTokensText}" FontSize="18" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- Aspire OTLP Bağlantı Kartı -->
+            <Border Background="{DynamicResource StudioCardBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="18"
+                    Margin="0,0,0,14">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding AspireStatusText}"
+                                   FontSize="13.5"
+                                   FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding AspireEndpointSummary}"
+                                   FontSize="12"
+                                   Margin="0,4,0,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:Button Content="Bağlantıyı Kontrol Et"
+                                   Icon="{ui:SymbolIcon Pulse24}"
+                                   Appearance="Secondary"
+                                   Command="{Binding CheckAspireCommand}"
+                                   Margin="0,0,8,0"/>
+                        <ui:Button Content="Aspire Dashboard"
+                                   Icon="{ui:SymbolIcon Open24}"
+                                   Appearance="Secondary"
+                                   Command="{Binding OpenAspireDashboardCommand}"
+                                   Margin="0,0,8,0"/>
+                        <ui:Button Content="Veri Klasörü"
+                                   Icon="{ui:SymbolIcon FolderOpen24}"
+                                   Appearance="Transparent"
+                                   Command="{Binding OpenGlossatorFolderCommand}"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- OTLP ve USD/TL Kur Tercihleri -->
+            <Border Background="{DynamicResource StudioCardBrush}"
+                    BorderBrush="{DynamicResource StudioBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="18"
+                    IsEnabled="{Binding IsLocked, Converter={StaticResource InverseBoolConverter}}">
+                <StackPanel>
+                    <TextBlock Text="OpenTelemetry &amp; Maliyet Kur Tercihleri" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12"/>
+
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="10"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="10"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="165"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="OTLP Endpoint (gRPC):" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2"
+                                    Text="{Binding OtelEndpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    PlaceholderText="http://localhost:4317"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Servis Adı:" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                    Text="{Binding OtelServiceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    PlaceholderText="Glossator.Studio"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="USD / TRY Kuru:" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <ui:TextBox Grid.Row="4" Grid.Column="1"
+                                    Text="{Binding UsdToTryRateText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    PlaceholderText="42.50"/>
+                        <ui:Button Grid.Row="4" Grid.Column="2"
+                                   Content="Canlı Kur Çek"
+                                   Icon="{ui:SymbolIcon ArrowSync24}"
+                                   Appearance="Secondary"
+                                   Margin="8,0,0,0"
+                                   Command="{Binding RefreshExchangeRateCommand}"/>
+                    </Grid>
+
+                    <Grid Margin="0,12,0,0">
+                        <TextBlock Text="{Binding ExchangeRateStatusText}"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+                        <ui:Button Content="Sistem Ayarlarını Kaydet"
+                                   Icon="{ui:SymbolIcon Save24}"
+                                   Appearance="Primary"
+                                   HorizontalAlignment="Right"
+                                   Command="{Binding SaveTelemetrySettingsCommand}"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

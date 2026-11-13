@@ -171,16 +171,12 @@ public sealed class ResilienceChatClient(
         }
 
         // 2. System.ClientModel (OpenAI SDK) HTTP Durum Kodları
-        if (ex is ClientResultException cre)
+        if (ex is ClientResultException cre && cre.Status > 0)
         {
-            var status = cre.Status;
-            if (status is 429 // TooManyRequests
-                or 503       // ServiceUnavailable
-                or 504       // GatewayTimeout
-                or 408)      // RequestTimeout
-            {
-                return true;
-            }
+            return cre.Status is 429 // TooManyRequests
+                or 503               // ServiceUnavailable
+                or 504               // GatewayTimeout
+                or 408;              // RequestTimeout
         }
 
         // 3. Standart .NET HttpClient İstisna ve Durum Kodları
@@ -189,13 +185,10 @@ public sealed class ResilienceChatClient(
             if (hre.StatusCode.HasValue)
             {
                 var code = (int)hre.StatusCode.Value;
-                if (code is 429 or 503 or 504 or 408)
-                {
-                    return true;
-                }
+                return code is 429 or 503 or 504 or 408;
             }
 
-            // Soket veya DNS bağlantı kopmaları
+            // Durum kodu yoksa soket veya DNS bağlantı kopmasıdır; tekrar dene
             return true;
         }
 

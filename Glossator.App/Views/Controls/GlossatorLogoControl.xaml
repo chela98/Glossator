@@ -1,0 +1,37 @@
+<UserControl x:Class="Glossator.App.Views.Controls.GlossatorLogoControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Viewbox Stretch="Uniform" SnapsToDevicePixels="True">
+        <Canvas Width="256" Height="256">
+            <!-- Mat Windows 11 Dark Fluent Squircle Zemin -->
+            <Border Canvas.Left="10" Canvas.Top="10"
+                    Width="236" Height="236"
+                    CornerRadius="52"
+                    BorderBrush="#2C3950"
+                    BorderThickness="4">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#161E2C" Offset="0"/>
+                        <GradientStop Color="#0D121C" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- Üst-sağ 45 derece sayfa pahlı geometrik G gövdesi (28px sabit kalınlık) -->
+            <Path Data="M 78,52 L 170,52 L 198,80 L 86,80 L 86,176 L 170,176 L 170,148 L 198,148 L 198,192 Q 198,204 186,204 L 78,204 Q 58,204 58,184 L 58,72 Q 58,52 78,52 Z"
+                  Fill="#F1F5F9"/>
+
+            <!-- Stüdyo Kobalt Mavi yatay terim/ayraç çubuğu -->
+            <Rectangle Canvas.Left="124" Canvas.Top="114"
+                       Width="74" Height="28"
+                       RadiusX="5" RadiusY="5">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#60A5FA" Offset="0"/>
+                        <GradientStop Color="#2563EB" Offset="1"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+        </Canvas>
+    </Viewbox>
+</UserControl>
