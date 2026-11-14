@@ -19,6 +19,20 @@ Geleneksel çeviri araçlarının veya ham LLM istemlerinin aksine Glossator, **
 
 ## Görsel Çıktı Kanıtları
 
+### Glossator Studio (Koyu & Aydınlık Fluent UI)
+
+**Aktif Kitap Masası & Canlı Ajan Günlüğü Çekmecesi** *(Koyu Mod — `Eloquent JavaScript` 2 bölüm, 5 kesit: `00:01:26`, `$0,0358`, `116,6 tok/s`, gizli reasoning token muhasebesi)*:
+
+![Glossator Studio Aktif Kitap Masası ve Canlı Ajan Günlüğü](docs/assets/ornek-test.png)
+
+| Kitaplığım *(Koyu Mod — Açık Lisanslı EPUB Kütüphanesi)* | Ayarlar, Çoklu Sağlayıcı & Reasoning *(Aydınlık Mod)* |
+| :---: | :---: |
+| ![Glossator Studio Kitaplığım](docs/assets/kutuphane.png) | ![Glossator Studio Ayarlar ve Sağlayıcılar](docs/assets/ayarlar.png) |
+
+---
+
+### EPUB Okuyucu Çıktı Karşılaştırması
+
 Gerçek bir teknik kitap üzerinde **Orijinal EPUB (İngilizce)** ile **Glossator Çıktısı (Türkçe)** sayfalarının yan yana okuyucu görünümü:
 
 | Orijinal EPUB (İngilizce) | Glossator Çıktısı (Türkçe) |
