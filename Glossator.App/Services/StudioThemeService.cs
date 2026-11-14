@@ -26,7 +26,9 @@ public sealed class StudioThemeService
         ["DataGridAlternatingRowBrush"] = "#07FFFFFF",
         ["DataGridGridLineBrush"] = "#16FFFFFF",
         ["StudioAccentForegroundBrush"] = "#60A5FA",
-        ["StudioOnAccentSoftTextBrush"] = "#FFFFFF"
+        ["StudioOnAccentSoftTextBrush"] = "#FFFFFF",
+        ["StudioSidebarTextBrush"] = "#CBD5E1",
+        ["StudioMutedTextBrush"] = "#94A3B8"
     };
 
     private static readonly IReadOnlyDictionary<string, string> LightPalette = new Dictionary<string, string>
@@ -45,7 +47,9 @@ public sealed class StudioThemeService
         ["DataGridAlternatingRowBrush"] = "#050F172A",
         ["DataGridGridLineBrush"] = "#1A0F172A",
         ["StudioAccentForegroundBrush"] = "#1D4ED8",
-        ["StudioOnAccentSoftTextBrush"] = "#0F172A"
+        ["StudioOnAccentSoftTextBrush"] = "#0F172A",
+        ["StudioSidebarTextBrush"] = "#334155",
+        ["StudioMutedTextBrush"] = "#475569"
     };
 
     public bool IsDarkTheme { get; private set; } = true;

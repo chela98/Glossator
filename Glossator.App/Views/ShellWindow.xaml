@@ -15,6 +15,11 @@
                  ExtendsContentIntoTitleBar="True"
                  WindowBackdropType="Mica"
                  WindowCornerPreference="Round"
+                 FontFamily="Segoe UI Variable Text, Segoe UI"
+                 TextOptions.TextFormattingMode="Display"
+                 TextOptions.TextRenderingMode="ClearType"
+                 UseLayoutRounding="True"
+                 SnapsToDevicePixels="True"
                  AllowDrop="True"
                  PreviewDragOver="ShellWindow_PreviewDragOver"
                  PreviewDrop="ShellWindow_PreviewDrop"
@@ -51,8 +56,9 @@
                             Margin="10,0,0,0"
                             VerticalAlignment="Center">
                         <TextBlock Text="EPUB Teknik Yerelleştirme"
-                                   FontSize="11"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                   FontSize="11.5"
+                                   FontWeight="Medium"
+                                   Foreground="{DynamicResource StudioSidebarTextBrush}"/>
                     </Border>
                 </StackPanel>
             </ui:TitleBar.Header>
@@ -98,9 +104,9 @@
                         <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Library}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="Library24" FontSize="15" Margin="0,0,10,0"/>
-                                <TextBlock Text="Kitaplığım" FontSize="13"/>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Library24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Kitaplığım" FontSize="13.5" VerticalAlignment="Center"/>
                             </StackPanel>
                         </RadioButton>
 
@@ -108,9 +114,9 @@
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Workspace}">
                             <Grid>
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:SymbolIcon Symbol="BookOpen24" FontSize="15" Margin="0,0,10,0"/>
-                                    <TextBlock Text="Aktif Kitap Masası" FontSize="13"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:SymbolIcon Symbol="BookOpen24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Aktif Kitap Masası" FontSize="13.5" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <Ellipse Width="7" Height="7"
                                          HorizontalAlignment="Right"
@@ -123,9 +129,9 @@
                         <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Glossary}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="Book24" FontSize="15" Margin="0,0,10,0"/>
-                                <TextBlock Text="Terim Sözlüğü" FontSize="13"/>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Book24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Terim Sözlüğü" FontSize="13.5" VerticalAlignment="Center"/>
                             </StackPanel>
                         </RadioButton>
 
@@ -133,9 +139,9 @@
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Settings}">
                             <Grid>
-                                <StackPanel Orientation="Horizontal">
-                                    <ui:SymbolIcon Symbol="Settings24" FontSize="15" Margin="0,0,10,0"/>
-                                    <TextBlock Text="Ayarlar" FontSize="13"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ui:SymbolIcon Symbol="Settings24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Ayarlar" FontSize="13.5" VerticalAlignment="Center"/>
                                 </StackPanel>
                                 <Ellipse Width="7" Height="7"
                                          HorizontalAlignment="Right"
@@ -148,18 +154,18 @@
                         <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=Telemetry}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="Pulse24" FontSize="15" Margin="0,0,10,0"/>
-                                <TextBlock Text="Telemetri" FontSize="13"/>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Pulse24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Telemetri" FontSize="13.5" VerticalAlignment="Center"/>
                             </StackPanel>
                         </RadioButton>
 
                         <RadioButton Style="{StaticResource SidebarNavButtonStyle}"
                                      GroupName="MainNavGroup"
                                      IsChecked="{Binding CurrentPage, Converter={StaticResource EnumEqualsConverter}, ConverterParameter=About}">
-                            <StackPanel Orientation="Horizontal">
-                                <ui:SymbolIcon Symbol="Info24" FontSize="15" Margin="0,0,10,0"/>
-                                <TextBlock Text="Hakkımda" FontSize="13"/>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:SymbolIcon Symbol="Info24" FontSize="16" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="Hakkımda" FontSize="13.5" VerticalAlignment="Center"/>
                             </StackPanel>
                         </RadioButton>
                     </StackPanel>
@@ -167,10 +173,10 @@
                     <!-- Son Kitaplar Başlık Satırı -->
                     <Grid Grid.Row="1" Margin="4,0,2,6">
                         <TextBlock Text="SON KİTAPLAR"
-                                   FontSize="10.5"
-                                   FontWeight="Bold"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
                                    VerticalAlignment="Center"
-                                   Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                                   Foreground="{DynamicResource StudioMutedTextBrush}"/>
                         <ui:Button ToolTip="Yeni EPUB dosyası aç..."
                                    Icon="{ui:SymbolIcon Add24}"
                                    Appearance="Transparent"
@@ -223,12 +229,12 @@
 
                                                 <StackPanel Grid.Column="1" Margin="9,0,0,0" VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Title}"
-                                                               FontSize="12"
-                                                               FontWeight="Medium"
+                                                               FontSize="12.5"
+                                                               FontWeight="SemiBold"
                                                                TextTrimming="CharacterEllipsis"
                                                                Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                                    <TextBlock FontSize="10.5"
-                                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                                    <TextBlock FontSize="11"
+                                                               Foreground="{DynamicResource StudioMutedTextBrush}">
                                                         <Run Text="{Binding TranslatedChapters, Mode=OneWay}"/>
                                                         <Run Text="/"/>
                                                         <Run Text="{Binding TotalChapters, Mode=OneWay}"/>
@@ -245,7 +251,7 @@
                             <TextBlock Text="Henüz kayıtlı kitap yok."
                                        FontSize="11.5"
                                        Margin="6,8"
-                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                                       Foreground="{DynamicResource StudioMutedTextBrush}"
                                        Visibility="{Binding Library.HasRecentBooks, Converter={StaticResource InverseBoolToVisConverter}}"/>
                         </Grid>
                     </ScrollViewer>
@@ -261,12 +267,12 @@
                         <Grid>
                             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                 <Border Width="26" Height="26" CornerRadius="13" Background="{DynamicResource StudioAccentBrush}">
-                                    <TextBlock Text="ED" FontSize="10" FontWeight="Bold" Foreground="White"
+                                    <TextBlock Text="ED" FontSize="10.5" FontWeight="Bold" Foreground="White"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
                                 <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="Emre Dalbudak" FontSize="12" FontWeight="SemiBold"/>
-                                    <TextBlock Text="@chela98" FontSize="10.5" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                    <TextBlock Text="Emre Dalbudak" FontSize="12.5" FontWeight="SemiBold"/>
+                                    <TextBlock Text="@chela98" FontSize="11" Foreground="{DynamicResource StudioMutedTextBrush}"/>
                                 </StackPanel>
                             </StackPanel>
 
@@ -401,7 +407,7 @@
                                    MaxWidth="380"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
-                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Foreground="{DynamicResource StudioSidebarTextBrush}"
                                    ToolTip="{Binding LiveOperationText}"/>
                     </StackPanel>
 
@@ -412,7 +418,7 @@
                                HorizontalAlignment="Right"
                                Margin="12,0"
                                TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"
+                               Foreground="{DynamicResource StudioMutedTextBrush}"
                                ToolTip="{Binding Telemetry.LiveTelemetryStripText}"/>
 
                     <ui:Button Grid.Column="2"
@@ -453,10 +459,10 @@
 
                         <Grid Grid.Row="0" Margin="0,0,0,6">
                             <TextBlock Text="CANLI AJAN GÜNLÜĞÜ (Son 300 satır)"
-                                       FontSize="10.5"
-                                       FontWeight="Bold"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
                                        VerticalAlignment="Center"
-                                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                                       Foreground="{DynamicResource StudioMutedTextBrush}"/>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <ui:Button Content="Tümünü Kopyala"
                                            Icon="{ui:SymbolIcon Copy24}"
