@@ -17,7 +17,7 @@ Geleneksel çeviri araçlarının veya ham LLM istemlerinin aksine Glossator, **
 
 ---
 
-## Görsel Çıktı Kanıtları
+## Canlı Görseller
 
 ### Glossator Studio (Koyu & Aydınlık Fluent UI)
 
@@ -25,7 +25,7 @@ Geleneksel çeviri araçlarının veya ham LLM istemlerinin aksine Glossator, **
 
 ![Glossator Studio Aktif Kitap Masası ve Canlı Ajan Günlüğü](docs/assets/ornek-test.png)
 
-| Kitaplığım *(Koyu Mod — Açık Lisanslı EPUB Kütüphanesi)* | Ayarlar, Çoklu Sağlayıcı & Reasoning *(Aydınlık Mod)* |
+| Kitaplığım *(Koyu Mod — EPUB Kütüphanesi)* | Ayarlar, Çoklu Sağlayıcı & Reasoning *(Aydınlık Mod)* |
 | :---: | :---: |
 | ![Glossator Studio Kitaplığım](docs/assets/kutuphane.png) | ![Glossator Studio Ayarlar ve Sağlayıcılar](docs/assets/ayarlar.png) |
 
