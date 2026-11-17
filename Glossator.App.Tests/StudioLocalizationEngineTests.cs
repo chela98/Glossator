@@ -1,3 +1,5 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Glossator.AI.Extensions;
@@ -42,17 +44,23 @@ public sealed class StudioLocalizationEngineTests : IDisposable
         }
     }
 
-    private sealed class StubChatClient(Func<IReadOnlyList<ChatMessage>, string> responder) : IChatClient
+    private sealed class StubChatClient(
+        Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<string>> asyncResponder) : IChatClient
     {
+        public StubChatClient(Func<IReadOnlyList<ChatMessage>, string> responder)
+            : this((msgs, _) => Task.FromResult(responder(msgs)))
+        {
+        }
+
         public ChatClientMetadata Metadata => new("StudioEngineMock");
 
-        public Task<ChatResponse> GetResponseAsync(
+        public async Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
         {
-            var text = responder(messages.ToList());
-            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
+            var text = await asyncResponder(messages.ToList(), cancellationToken);
+            return new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]);
         }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -61,13 +69,33 @@ public sealed class StudioLocalizationEngineTests : IDisposable
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var text = responder(messages.ToList());
+            var text = await asyncResponder(messages.ToList(), cancellationToken);
             yield return new ChatResponseUpdate(ChatRole.Assistant, text);
             await Task.Yield();
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
+    }
+
+    private sealed class MockPipelineStatusResponse(int status) : PipelineResponse
+    {
+        private sealed class EmptyHeaders : PipelineResponseHeaders
+        {
+            public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() => Enumerable.Empty<KeyValuePair<string, string>>().GetEnumerator();
+            public override bool TryGetValue(string name, out string? value) { value = null; return false; }
+            public override bool TryGetValues(string name, out IEnumerable<string>? values) { values = null; return false; }
+        }
+
+        private readonly EmptyHeaders _headers = new();
+        public override int Status => status;
+        public override string ReasonPhrase => string.Empty;
+        protected override PipelineResponseHeaders HeadersCore => _headers;
+        public override BinaryData Content => BinaryData.Empty;
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => BinaryData.Empty;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) => ValueTask.FromResult(BinaryData.Empty);
+        public override void Dispose() { }
     }
 
     private async Task<(ServiceProvider Provider, CheckpointStore Store)> BuildServiceProviderAsync(
@@ -253,5 +281,102 @@ public sealed class StudioLocalizationEngineTests : IDisposable
 
         var checkpoints = await store.GetCompletedCheckpointsAsync("Test Book", "ch01.html");
         Assert.False(checkpoints.ContainsKey(0));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenOneChapterFailsWith429UnderConcurrency_IsolatesFailureAndCompletesSiblings()
+    {
+        var opfDir = Path.Combine(_tempDir, "studio_isolated_429");
+        Directory.CreateDirectory(opfDir);
+
+        File.WriteAllText(Path.Combine(opfDir, "ch01.html"), "<html><body><p>Alpha paragraph for isolated sibling completion.</p></body></html>");
+        File.WriteAllText(Path.Combine(opfDir, "ch02.html"), "<html><body><p>BetaFailureMarker triggers HTTP 429 limit.</p></body></html>");
+        File.WriteAllText(Path.Combine(opfDir, "ch03.html"), "<html><body><p>Gamma paragraph for isolated sibling completion.</p></body></html>");
+
+        var styleClient = new StubChatClient(_ => "Teknik üslup.");
+        var transClient = new StubChatClient(async (messages, ct) =>
+        {
+            var prompt = messages.LastOrDefault()?.Text ?? string.Empty;
+            if (prompt.Contains("BetaFailureMarker"))
+            {
+                throw new ClientResultException("HTTP 429 (fair_share_limit_exceeded)", new MockPipelineStatusResponse(429));
+            }
+
+            await Task.Delay(60, ct);
+            ct.ThrowIfCancellationRequested();
+            return prompt.Contains("Alpha")
+                ? "[BLOK_000]\nAlfa paragrafı tamamlandı.\n[/BLOK_000]"
+                : "[BLOK_000]\nGama paragrafı tamamlandı.\n[/BLOK_000]";
+        });
+        var revClient = new StubChatClient(_ => """{"isApproved": true, "patches": []}""");
+
+        var (sp, _) = await BuildServiceProviderAsync(styleClient, transClient, revClient);
+        await using var _sp = sp;
+
+        var engine = new StudioLocalizationEngine(sp);
+        var ch1 = new EpubItem { Id = "ch1", Href = "ch01.html", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var ch2 = new EpubItem { Id = "ch2", Href = "ch02.html", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var ch3 = new EpubItem { Id = "ch3", Href = "ch03.html", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var package = new EpubPackage { Title = "Isolated429Book", OpfDirectory = opfDir, Spine = [ch1, ch2, ch3] };
+
+        var summary = await engine.RunAsync(package, [ch1, ch2, ch3], concurrency: 3, isFresh: false);
+
+        var failure = Assert.Single(summary.FailedChapters);
+        Assert.Equal("ch02.html", failure.ChapterFileName);
+        Assert.Contains("429", failure.Message);
+        Assert.Equal(2, summary.ChaptersCompleted);
+        Assert.True(File.Exists(Path.Combine(opfDir, "ch01_tr.html.done")));
+        Assert.False(File.Exists(Path.Combine(opfDir, "ch02_tr.html.done")));
+        Assert.True(File.Exists(Path.Combine(opfDir, "ch03_tr.html.done")));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenOneChapterFailsWith401AuthError_CancelsSiblingsAndPropagatesFatalError()
+    {
+        var opfDir = Path.Combine(_tempDir, "studio_fatal_401");
+        Directory.CreateDirectory(opfDir);
+
+        File.WriteAllText(Path.Combine(opfDir, "ch01.html"), "<html><body><p>AlphaSlowSibling waits for auth abort.</p></body></html>");
+        File.WriteAllText(Path.Combine(opfDir, "ch02.html"), "<html><body><p>BetaAuthError throws 401.</p></body></html>");
+
+        var alphaEnteredTranslator = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var siblingCancelled = false;
+        var styleClient = new StubChatClient(_ => "Teknik üslup.");
+        var transClient = new StubChatClient(async (messages, ct) =>
+        {
+            var prompt = messages.LastOrDefault()?.Text ?? string.Empty;
+            if (prompt.Contains("BetaAuthError"))
+            {
+                await alphaEnteredTranslator.Task.WaitAsync(ct);
+                throw new ClientResultException("HTTP 401 Unauthorized", new MockPipelineStatusResponse(401));
+            }
+
+            alphaEnteredTranslator.TrySetResult();
+            try
+            {
+                await Task.Delay(5000, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                siblingCancelled = true;
+                throw;
+            }
+            return "[BLOK_000]\nTamam.\n[/BLOK_000]";
+        });
+        var revClient = new StubChatClient(_ => """{"isApproved": true, "patches": []}""");
+
+        var (sp, _) = await BuildServiceProviderAsync(styleClient, transClient, revClient);
+        await using var _sp = sp;
+
+        var engine = new StudioLocalizationEngine(sp);
+        var ch1 = new EpubItem { Id = "ch1", Href = "ch01.html", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var ch2 = new EpubItem { Id = "ch2", Href = "ch02.html", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var package = new EpubPackage { Title = "Fatal401Book", OpfDirectory = opfDir, Spine = [ch1, ch2] };
+
+        var ex = await Assert.ThrowsAsync<ClientResultException>(() =>
+            engine.RunAsync(package, [ch1, ch2], concurrency: 2, isFresh: false));
+
+        Assert.Equal(401, ex.Status);
+        Assert.True(siblingCancelled);
     }
 }

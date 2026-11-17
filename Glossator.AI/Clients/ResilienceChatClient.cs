@@ -1,7 +1,6 @@
 using System.ClientModel;
 using System.Globalization;
-using System.Net;
-using System.Net.Sockets;
+using Glossator.AI.Diagnostics;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -21,7 +20,7 @@ public sealed class ResilienceChatClient(
 {
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(60);
     private readonly TimeSpan _initialDelay = initialDelay == default ? TimeSpan.FromSeconds(2) : initialDelay;
-    private readonly int _maxAttempts = Math.Max(1, maxRetries);
+    private readonly int _maxRetries = Math.Max(0, maxRetries);
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -32,18 +31,20 @@ public sealed class ResilienceChatClient(
 
         for (var attempt = 1; ; attempt++)
         {
+            ResilienceAttemptContext.Current?.RecordAttemptStart(attempt);
             try
             {
                 return await base.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsTransientException(ex, cancellationToken) && attempt < _maxAttempts)
+            catch (Exception ex) when (AiExceptionClassifier.IsTransient(ex, cancellationToken) && attempt <= _maxRetries)
             {
                 var waitDelay = ComputeRetryDelay(ex, delay, out delay);
 
                 logger.LogWarning(ex,
-                    "API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
-                    waitDelay.TotalSeconds, attempt, _maxAttempts);
+                    "API {FailureReason} yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
+                    AiExceptionClassifier.DescribeFailure(ex), waitDelay.TotalSeconds, attempt, _maxRetries);
 
+                ResilienceAttemptContext.Current?.RecordRetryWait(waitDelay);
                 await Task.Delay(waitDelay, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -61,27 +62,37 @@ public sealed class ResilienceChatClient(
             IAsyncEnumerator<ChatResponseUpdate>? enumerator = null;
             var streamStarted = false;
 
+            ResilienceAttemptContext.Current?.RecordAttemptStart(attempt);
             try
             {
                 enumerator = base.GetStreamingResponseAsync(messages, options, cancellationToken)
                     .GetAsyncEnumerator(cancellationToken);
                 streamStarted = await enumerator.MoveNextAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (IsTransientException(ex, cancellationToken) && attempt < _maxAttempts)
+            catch (Exception ex) when (AiExceptionClassifier.IsTransient(ex, cancellationToken) && attempt <= _maxRetries)
             {
                 var waitDelay = ComputeRetryDelay(ex, delay, out delay);
 
                 logger.LogWarning(ex,
-                    "Streaming API Kota Sınırı (429) veya Geçici Hata yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
-                    waitDelay.TotalSeconds, attempt, _maxAttempts);
+                    "Streaming {FailureReason} yakalandı. {DelaySec:F2}sn sonra yeniden deneniyor... (Deneme {Attempt}/{MaxRetries})",
+                    AiExceptionClassifier.DescribeFailure(ex), waitDelay.TotalSeconds, attempt, _maxRetries);
 
                 if (enumerator != null)
                 {
                     await enumerator.DisposeAsync().ConfigureAwait(false);
                 }
 
+                ResilienceAttemptContext.Current?.RecordRetryWait(waitDelay);
                 await Task.Delay(waitDelay, cancellationToken).ConfigureAwait(false);
                 continue;
+            }
+            catch
+            {
+                if (enumerator != null)
+                {
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
+                }
+                throw;
             }
 
             try
@@ -156,6 +167,10 @@ public sealed class ResilienceChatClient(
         if (total > (input + output) && input > 0)
         {
             var implicitReasoning = total - input - output;
+#pragma warning disable MEAI001
+            details.OutputTextTokenCount ??= output;
+#pragma warning restore MEAI001
+            details.ReasoningTokenCount ??= implicitReasoning;
             details.AdditionalCounts ??= [];
             if (!details.AdditionalCounts.ContainsKey("OutputTokenDetails.ReasoningTokenCount"))
             {
@@ -167,18 +182,33 @@ public sealed class ResilienceChatClient(
         return uc;
     }
 
-    private static TimeSpan ComputeRetryDelay(Exception ex, TimeSpan currentBackoff, out TimeSpan nextBackoff)
+    internal static TimeSpan ComputeRetryDelay(Exception ex, TimeSpan currentBackoff, out TimeSpan nextBackoff)
     {
         var cappedCurrent = currentBackoff > MaxRetryDelay ? MaxRetryDelay : currentBackoff;
-        var waitDelay = cappedCurrent;
+        var hasRetryAfter = TryGetRetryAfterDelay(ex, out var retryAfter);
 
-        if (TryGetRetryAfterDelay(ex, out var retryAfter) && retryAfter > waitDelay)
+        TimeSpan waitDelay;
+        if (hasRetryAfter && retryAfter > cappedCurrent)
         {
-            waitDelay = retryAfter > MaxRetryDelay ? MaxRetryDelay : retryAfter;
+            var jitterMs = retryAfter >= TimeSpan.FromSeconds(1)
+                ? Random.Shared.Next(100, 500)
+                : Random.Shared.Next(1, Math.Max(2, (int)(retryAfter.TotalMilliseconds * 0.1) + 1));
+            waitDelay = TimeSpan.FromMilliseconds(Math.Min(MaxRetryDelay.TotalMilliseconds, retryAfter.TotalMilliseconds + jitterMs));
+        }
+        else
+        {
+            waitDelay = cappedCurrent;
         }
 
-        // Jitter ile üstel geri çekilme (thundering herd koruması) ve üst sınır
-        var nextMs = cappedCurrent.TotalMilliseconds * 2 + Random.Shared.Next(100, 500);
+        // Sonraki denemenin tabanı uygulanan gerçek beklemeden 2x büyür;
+        // sunucu her seferinde aynı Retry-After değerini dönse bile bekleme artarak tırmanır (örn. 15 -> ~30 -> 60sn).
+        var effectiveBaseMs = Math.Max(
+            cappedCurrent.TotalMilliseconds,
+            hasRetryAfter ? retryAfter.TotalMilliseconds : waitDelay.TotalMilliseconds);
+        var expJitterMs = effectiveBaseMs >= 1000
+            ? Random.Shared.Next(100, 500)
+            : Random.Shared.Next(1, Math.Max(2, (int)(effectiveBaseMs * 0.2) + 1));
+        var nextMs = effectiveBaseMs * 2 + expJitterMs;
         nextBackoff = TimeSpan.FromMilliseconds(Math.Min(MaxRetryDelay.TotalMilliseconds, nextMs));
 
         return waitDelay;
@@ -226,89 +256,6 @@ public sealed class ResilienceChatClient(
         }
 
         delay = TimeSpan.Zero;
-        return false;
-    }
-
-    private static bool IsTransientException(Exception ex, CancellationToken cancellationToken)
-    {
-        // 1. Çağıranın iptal sinyali kesinlikle geçici hata sayılamaz (Ctrl+C anında durmalı)
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return false;
-        }
-
-        // Exception zincirini (HttpClient TaskCanceledException(TimeoutException), ClientResultException(SocketException) vb.) denetle
-        if (HasCallerCancellation(ex, cancellationToken))
-        {
-            return false;
-        }
-
-        for (var current = ex; current != null; current = current.InnerException)
-        {
-            // 2. System.ClientModel (OpenAI SDK) HTTP Durum Kodları
-            if (current is ClientResultException cre && cre.Status > 0)
-            {
-                return IsTransientStatusCode(cre.Status);
-            }
-
-            // 3. Standart .NET HttpClient İstisna ve Durum Kodları
-            if (current is HttpRequestException hre)
-            {
-                if (hre.StatusCode.HasValue)
-                {
-                    return IsTransientStatusCode((int)hre.StatusCode.Value);
-                }
-
-                // Durum kodu yoksa soket veya DNS bağlantı kopmasıdır; tekrar dene
-                return true;
-            }
-
-            // 4. Ağ zaman aşımları (HttpClient TimeoutException sarmalı dahil), soket veya ham I/O akış kopmaları
-            if (current is TimeoutException or SocketException || current.GetType() == typeof(IOException))
-            {
-                return true;
-            }
-        }
-
-        // Salt iptal (içinde TimeoutException yoksa) yeniden denenmez
-        if (ex is OperationCanceledException)
-        {
-            return false;
-        }
-
-        // 5. İkincil Fallback: Durum kodu fırlatmayan özel LLM proxy sunucuları için metin araması
-        var message = ex.Message;
-        return message.Contains("429", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("TooManyRequests", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Rate limit", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Quota", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("502", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Bad Gateway", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("503", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Service Unavailable", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("504", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Gateway Timeout", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsTransientStatusCode(int statusCode) => statusCode is
-        408 // RequestTimeout
-        or 429 // TooManyRequests
-        or 502 // BadGateway
-        or 503 // ServiceUnavailable
-        or 504; // GatewayTimeout
-
-    private static bool HasCallerCancellation(Exception ex, CancellationToken callerToken)
-    {
-        for (var current = ex; current != null; current = current.InnerException)
-        {
-            if (current is OperationCanceledException oce
-                && oce.CancellationToken.CanBeCanceled
-                && oce.CancellationToken == callerToken)
-            {
-                return true;
-            }
-        }
-
         return false;
     }
 }

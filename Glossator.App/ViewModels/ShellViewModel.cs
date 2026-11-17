@@ -404,12 +404,43 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
                 LiveOperationText = "Durduruldu.";
                 Banner.Show("Çeviri Durduruldu", "Tamamlanmış cümleler SQLite checkpoint önbelleğine kaydedildi.\n" + shortBanner, InfoBarSeverity.Warning);
             }
-            else
+            else if (summary.FailedChapters.Count == 0)
             {
                 OverallPercentage = 100;
                 OverallPercentageText = "%100.0";
                 LiveOperationText = "Tamamlandı.";
                 Banner.Show("Çeviri Tamamlandı", shortBanner, InfoBarSeverity.Success);
+            }
+            else
+            {
+                var succeededChapters = Math.Max(0, selected.Count - summary.FailedChapters.Count);
+                var pct = selected.Count > 0 ? Math.Clamp(Math.Round((double)succeededChapters / selected.Count * 100.0, 1), 0, 100) : 0;
+                OverallPercentage = pct;
+                OverallPercentageText = $"%{pct:F1}";
+
+                var failedPreview = string.Join(", ", summary.FailedChapters.Take(3).Select(f => f.ChapterFileName));
+                if (summary.FailedChapters.Count > 3)
+                {
+                    failedPreview += $" (+{summary.FailedChapters.Count - 3})";
+                }
+
+                if (succeededChapters > 0)
+                {
+                    LiveOperationText = $"Kısmi tamamlandı ({succeededChapters}/{selected.Count} bölüm tamamlandı, {summary.FailedChapters.Count} bölüm hatalı).";
+                    Banner.Show(
+                        $"Kısmi Tamamlanma ({summary.FailedChapters.Count} Bölüm Hatalı)",
+                        $"{shortBanner}\nHatalı bölümler: {failedPreview}",
+                        InfoBarSeverity.Warning);
+                }
+                else
+                {
+                    LiveOperationText = "Hata nedeniyle tamamlanamadı.";
+                    var firstFailure = summary.FailedChapters[0];
+                    Banner.Show(
+                        "Çeviri Başarısız",
+                        $"{firstFailure.ChapterFileName}: {firstFailure.Message}\n{shortBanner}",
+                        InfoBarSeverity.Error);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -552,6 +583,7 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         var rateSourceLabel = _settingsService.LastExchangeRateQuote?.Source ?? "Kayıtlı/Yedek";
         double totalUsd = 0;
         long totalIn = 0;
+        long totalCached = 0;
         long totalVisibleOut = 0;
         long totalBilledOut = 0;
         long totalReason = 0;
@@ -562,21 +594,45 @@ public sealed class ShellViewModel : ObservableObject, IDisposable
         foreach (var (stage, stats) in summary.StageStats)
         {
             var (provName, modelName, inRate, outRate, isFree) = opts.ResolveStagePricing(stage);
+            var inTok = Interlocked.Read(ref stats.InputTokens);
+            var cachedTok = Interlocked.Read(ref stats.CachedInputTokens);
+            var visOut = Interlocked.Read(ref stats.VisibleOutputTokens);
+            var billedOut = Interlocked.Read(ref stats.BilledOutputTokens);
             var reasoning = stats.ReasoningTokens;
-            var costUsd = isFree ? 0.0 : (stats.InputTokens / 1_000_000.0 * inRate) + (stats.BilledOutputTokens / 1_000_000.0 * outRate);
+            var costUsd = isFree ? 0.0 : (inTok / 1_000_000.0 * inRate) + (billedOut / 1_000_000.0 * outRate);
 
             totalUsd += costUsd;
-            totalIn += stats.InputTokens;
-            totalVisibleOut += stats.VisibleOutputTokens;
-            totalBilledOut += stats.BilledOutputTokens;
+            totalIn += inTok;
+            totalCached += cachedTok;
+            totalVisibleOut += visOut;
+            totalBilledOut += billedOut;
             totalReason += reasoning;
 
+            var cacheLabel = cachedTok > 0 && inTok > 0
+                ? $" (Cache Hit: {cachedTok:N0} / %{(double)cachedTok * 100.0 / inTok:F1})"
+                : cachedTok > 0
+                    ? $" (Cache Hit: {cachedTok:N0})"
+                    : string.Empty;
             var priceLabel = isFree ? "Ücretsiz" : $"${costUsd:F4} ({costUsd * usdToTry:F2} TL)";
-            sb.AppendLine($"  {stage} [{provName}: {modelName}]: {stats.Calls} çağrı | In: {stats.InputTokens:N0} | Out: {stats.VisibleOutputTokens:N0} (Billed: {stats.BilledOutputTokens:N0}, Reason: {reasoning:N0}) | {priceLabel}");
+            sb.AppendLine($"  {stage} [{provName}: {modelName}]: {stats.Calls} çağrı | In: {inTok:N0}{cacheLabel} | Out: {visOut:N0} (Billed: {billedOut:N0}, Reason: {reasoning:N0}) | {priceLabel}");
         }
 
         var totalTry = totalUsd * usdToTry;
-        sb.AppendLine($"TOPLAM: In {totalIn:N0} | Visible {totalVisibleOut:N0} | Billed {totalBilledOut:N0} | Reason {totalReason:N0} | Maliyet: ${totalUsd:F4} ({totalTry:F2} TL, Kur: {usdToTry:F2} [{rateSourceLabel}])");
+        var totalCacheLabel = totalCached > 0 && totalIn > 0
+            ? $" (Cache: {totalCached:N0} / %{(double)totalCached * 100.0 / totalIn:F1})"
+            : totalCached > 0
+                ? $" (Cache: {totalCached:N0})"
+                : string.Empty;
+        sb.AppendLine($"TOPLAM: In {totalIn:N0}{totalCacheLabel} | Visible {totalVisibleOut:N0} | Billed {totalBilledOut:N0} | Reason {totalReason:N0} | Maliyet: ${totalUsd:F4} ({totalTry:F2} TL, Kur: {usdToTry:F2} [{rateSourceLabel}])");
+
+        if (summary.FailedChapters.Count > 0)
+        {
+            sb.AppendLine($"BAŞARISIZ BÖLÜMLER ({summary.FailedChapters.Count}):");
+            foreach (var failure in summary.FailedChapters)
+            {
+                sb.AppendLine($"  - {failure.ChapterFileName}: {failure.Message}");
+            }
+        }
 
         shortBanner = $"Süre: {summary.Elapsed:hh\\:mm\\:ss} | Bölüm: {summary.ChaptersCompleted} | Kesit: {summary.SectionsCompleted} | Maliyet: ${totalUsd:F4} (~{totalTry:F2} TL)";
         return sb.ToString();

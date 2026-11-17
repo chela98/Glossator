@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Glossator.AI.Clients;
 using Glossator.AI.Diagnostics;
 using Glossator.AI.Extensions;
 using Glossator.AI.Workflows;
@@ -28,6 +29,10 @@ public sealed class ParallelLocalizationEngine(
     ILogger<ParallelLocalizationEngine>? logger = null)
 {
     private readonly ILogger<ParallelLocalizationEngine> _logger = logger ?? NullLogger<ParallelLocalizationEngine>.Instance;
+    private volatile IReadOnlyList<(string ChapterFileName, string Message)> _lastFailedChapters = [];
+
+    public IReadOnlyList<(string ChapterFileName, string Message)> LastFailedChapters => _lastFailedChapters;
+
     public async Task RunAsync(
         EpubPackage package,
         List<EpubItem> selectedChapters,
@@ -40,6 +45,7 @@ public sealed class ParallelLocalizationEngine(
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(selectedChapters);
 
+        _lastFailedChapters = [];
         if (selectedChapters.Count == 0)
         {
             return;
@@ -56,6 +62,7 @@ public sealed class ParallelLocalizationEngine(
 
         GlossatorDiagnostics.ResetSessionStats();
         var sessionStopwatch = Stopwatch.StartNew();
+        var failedChapters = new ConcurrentQueue<(string ChapterFileName, string Message, Exception Exception)>();
 
         try
         {
@@ -296,16 +303,27 @@ public sealed class ParallelLocalizationEngine(
                         mainProgress.Increment(1);
                     }
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || ct.IsCancellationRequested)
                     {
                         task.Description = $"[bold red]İPTAL: {Markup.Escape(chapterFileName)}[/]";
                         throw;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (AiExceptionClassifier.IsFatalConfigurationOrAuth(ex))
                     {
-                        _logger.LogError(ex, "Worker failed on chapter '{Chapter}'", chapterFileName);
+                        _logger.LogError(ex, "Fatal configuration or auth failure on chapter '{Chapter}'. Stopping all workers.", chapterFileName);
                         task.Description = $"[bold red]HATA: {Markup.Escape(chapterFileName)}: {Markup.Escape(ex.Message)}[/]";
                         throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Worker failed on chapter '{Chapter}' (isolated from sibling workers)", chapterFileName);
+                        failedChapters.Enqueue((chapterFileName, ex.Message, ex));
+                        task.Description = $"[bold red]HATA: {Markup.Escape(chapterFileName)}: {Markup.Escape(ex.Message)}[/]";
+                        task.StopTask();
+                        lock (activeTasks)
+                        {
+                            mainProgress.Increment(1);
+                        }
                     }
                     finally
                     {
@@ -328,6 +346,9 @@ public sealed class ParallelLocalizationEngine(
         finally
         {
             sessionStopwatch.Stop();
+            var failuresSnapshot = failedChapters.Select(f => (f.ChapterFileName, f.Message)).ToList();
+            _lastFailedChapters = failuresSnapshot;
+
             var snapshot = GlossatorDiagnostics.GetStageStatsSnapshot();
             if (snapshot.Count > 0 || GlossatorDiagnostics.SessionSectionsCompleted > 0)
             {
@@ -336,7 +357,29 @@ public sealed class ParallelLocalizationEngine(
                 var rateQuote = await ResolveSessionExchangeRateAsync(rootServiceProvider);
                 RenderSessionReport(sessionStopwatch.Elapsed, aiOpts, rateQuote, snapshot);
             }
+
+            if (failuresSnapshot.Count > 0)
+            {
+                RenderFailedChaptersSummary(failuresSnapshot);
+            }
         }
+
+        if (failedChapters.Count == selectedChapters.Count && !cancellationToken.IsCancellationRequested)
+        {
+            throw new AggregateException(
+                $"{failedChapters.Count} bölümün tamamı hata nedeniyle başarısız oldu.",
+                failedChapters.Select(f => f.Exception));
+        }
+    }
+
+    private static void RenderFailedChaptersSummary(IReadOnlyList<(string ChapterFileName, string Message)> failures)
+    {
+        var lines = failures.Select(f => $"[red]•[/] [bold]{Markup.Escape(f.ChapterFileName)}[/]: {Markup.Escape(f.Message)}");
+        var panel = new Panel(new Markup(string.Join("\n", lines) + "\n\n[dim]Başarıyla tamamlanan diğer bölümler ve ara checkpoint kayıtları korundu.[/]"))
+            .Header($"[bold red]BAŞARISIZ BÖLÜMLER ({failures.Count})[/]")
+            .BorderColor(Color.Red);
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(panel);
     }
 
     private static async Task<ExchangeRateQuote> ResolveSessionExchangeRateAsync(IServiceProvider sp)
@@ -389,6 +432,7 @@ public sealed class ParallelLocalizationEngine(
             .AddColumn(new TableColumn("[bold white]Ajan / Model[/]"))
             .AddColumn(new TableColumn("[bold cyan]Çağrı[/]").RightAligned())
             .AddColumn(new TableColumn("[bold green]Girdi (Input)[/]").RightAligned())
+            .AddColumn(new TableColumn("[bold teal]Önbellek (Cache)[/]").RightAligned())
             .AddColumn(new TableColumn("[bold blue]Görünür Çıktı[/]").RightAligned())
             .AddColumn(new TableColumn("[bold magenta1]Düşünme (Reasoning)[/]").RightAligned())
             .AddColumn(new TableColumn("[bold yellow]Fatura Çıktı[/]").RightAligned())
@@ -396,6 +440,7 @@ public sealed class ParallelLocalizationEngine(
 
         long totalCalls = 0;
         long totalIn = 0;
+        long totalCached = 0;
         long totalVisibleOut = 0;
         long totalReasoning = 0;
         long totalBilledOut = 0;
@@ -412,12 +457,14 @@ public sealed class ParallelLocalizationEngine(
             var s = snapshot[stage];
             var calls = Interlocked.Read(ref s.Calls);
             var inTok = Interlocked.Read(ref s.InputTokens);
+            var cachedTok = Interlocked.Read(ref s.CachedInputTokens);
             var visOut = Interlocked.Read(ref s.VisibleOutputTokens);
             var billedOut = Interlocked.Read(ref s.BilledOutputTokens);
-            var reasonTok = Math.Max(0, billedOut - visOut);
+            var reasonTok = s.ReasoningTokens;
 
             totalCalls += calls;
             totalIn += inTok;
+            totalCached += cachedTok;
             totalVisibleOut += visOut;
             totalReasoning += reasonTok;
             totalBilledOut += billedOut;
@@ -433,6 +480,11 @@ public sealed class ParallelLocalizationEngine(
             grandTotalUsd += stageUsd;
 
             var stageLabel = $"[bold]{Markup.Escape(stage)}[/] [dim]({Markup.Escape(provName)}: {Markup.Escape(modelId)})[/]";
+            var cacheLabel = cachedTok > 0 && inTok > 0
+                ? $"{cachedTok:N0} [dim](%{(double)cachedTok * 100.0 / inTok:F1})[/]"
+                : cachedTok > 0
+                    ? $"{cachedTok:N0}"
+                    : "[dim]0[/]";
             var costLabel = isFree
                 ? $"[green]$0.0000[/] [dim](Ücretsiz)[/]"
                 : $"${stageUsd:F4} [dim](~{stageTry:F2} ₺)[/]";
@@ -441,6 +493,7 @@ public sealed class ParallelLocalizationEngine(
                 stageLabel,
                 $"{calls:N0}",
                 $"{inTok:N0}",
+                cacheLabel,
                 $"{visOut:N0}",
                 reasonTok > 0 ? $"{reasonTok:N0}" : "[dim]0[/]",
                 $"{billedOut:N0}",
@@ -448,12 +501,16 @@ public sealed class ParallelLocalizationEngine(
         }
 
         var grandTotalTry = grandTotalUsd * usdToTry;
+        var totalCacheText = totalCached > 0 && totalIn > 0
+            ? $"[bold teal]{totalCached:N0} (%{(double)totalCached * 100.0 / totalIn:F1})[/]"
+            : $"[bold teal]{totalCached:N0}[/]";
 
         table.AddEmptyRow();
         table.AddRow(
             "[bold yellow]TOPLAM[/]",
             $"[bold cyan]{totalCalls:N0}[/]",
             $"[bold green]{totalIn:N0}[/]",
+            totalCacheText,
             $"[bold blue]{totalVisibleOut:N0}[/]",
             $"[bold magenta1]{totalReasoning:N0}[/]",
             $"[bold yellow]{totalBilledOut:N0}[/]",

@@ -247,6 +247,58 @@ public class BookLocalizationPipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task TranslateSectionAsync_WhenWorkflowThrowsTransient503_SkipsDirectTranslatorFallbackAndMicroRecovery()
+    {
+        var styleClient = new MockQueuedClient();
+        var transClient = MockQueuedClient.FromHandlers(
+            _ => throw new System.ClientModel.ClientResultException("HTTP 503 (api_error: model_capacity_exhausted)", new MockPipelineStatusResponse(503)),
+            _ => "[BLOK_001]\nBu yedek çalışmamalı.\n[/BLOK_001]");
+        var revClient = new MockQueuedClient();
+
+        var activities = new List<string>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = act => activities.Add(act.OperationName)
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var pipeline = new BookLocalizationPipeline(
+            styleClient, transClient, revClient,
+            _postProcessor, "STYLE", "TRANS", "REV");
+        pipeline.SetStyleGuide("Hazır Kılavuz");
+
+        var ex = await Assert.ThrowsAsync<System.ClientModel.ClientResultException>(() =>
+            pipeline.TranslateSectionAsync(CreateTwoBlockSection()));
+
+        Assert.Equal(503, ex.Status);
+        Assert.Equal(1, transClient.CallCount);
+        Assert.DoesNotContain("DirectTranslatorFallback", activities);
+        Assert.DoesNotContain("MicroRecovery", activities);
+    }
+
+    private sealed class MockPipelineStatusResponse(int status) : System.ClientModel.Primitives.PipelineResponse
+    {
+        private sealed class EmptyHeaders : System.ClientModel.Primitives.PipelineResponseHeaders
+        {
+            public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() => Enumerable.Empty<KeyValuePair<string, string>>().GetEnumerator();
+            public override bool TryGetValue(string name, out string? value) { value = null; return false; }
+            public override bool TryGetValues(string name, out IEnumerable<string>? values) { values = null; return false; }
+        }
+
+        private readonly EmptyHeaders _headers = new();
+        public override int Status => status;
+        public override string ReasonPhrase => string.Empty;
+        protected override System.ClientModel.Primitives.PipelineResponseHeaders HeadersCore => _headers;
+        public override BinaryData Content => BinaryData.Empty;
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => BinaryData.Empty;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) => ValueTask.FromResult(BinaryData.Empty);
+        public override void Dispose() { }
+    }
+
+    [Fact]
     public async Task RegisterCachedSectionAsync_UpdatesPostProcessorTrackerForSubsequentSections()
     {
         // Arrange

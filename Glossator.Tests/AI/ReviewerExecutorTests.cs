@@ -335,4 +335,63 @@ public class ReviewerExecutorTests
         // Assert
         Assert.Null(parsed);
     }
+
+    [Fact]
+    public async Task HandleAsync_WhenSelfRepairRuns_IsolatesRepairActivitySoPrimaryReviewerTagsArePreserved()
+    {
+        var stoppedActivities = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = src => src.Name == Glossator.AI.Diagnostics.GlossatorDiagnostics.SourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = act => stoppedActivities.Add(act)
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        var client = new UsageTrackedQueueClient(
+            ("{\"broken\":", new UsageDetails { InputTokenCount = 9100, OutputTokenCount = 220, ReasoningTokenCount = 50 }),
+            ("""{"isApproved": true, "patches": []}""", new UsageDetails { InputTokenCount = 320, OutputTokenCount = 45, ReasoningTokenCount = 0 }));
+
+        var executor = new ReviewerExecutor(client, "REV_SYS");
+        var state = new TranslationReviewState(
+            OriginalText: "[BLOK_001]\nSource.\n[/BLOK_001]",
+            CurrentTranslation: "[BLOK_001]\nKaynak.\n[/BLOK_001]",
+            DoNotTranslateTerms: [],
+            StyleGuide: "Teknik",
+            GlossaryTerms: null,
+            IsApproved: false,
+            Feedback: null,
+            AttemptCount: 1);
+
+        var result = await executor.HandleAsync(state, null!);
+
+        Assert.True(result.IsApproved);
+        var primarySpan = Assert.Single(stoppedActivities, a => a.OperationName == "ReviewerAgent");
+        var repairSpan = Assert.Single(stoppedActivities, a => a.OperationName == "ReviewerJsonRepair");
+        Assert.Equal(9100L, primarySpan.GetTagItem("gen_ai.usage.input_tokens"));
+        Assert.Equal(320L, repairSpan.GetTagItem("gen_ai.usage.input_tokens"));
+    }
+
+    private sealed class UsageTrackedQueueClient(params (string Text, UsageDetails Usage)[] responses) : IChatClient
+    {
+        private readonly Queue<(string Text, UsageDetails Usage)> _queue = new(responses);
+        public ChatClientMetadata Metadata => new("UsageTrackedMock");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            var (text, usage) = _queue.Dequeue();
+            var update = new ChatResponseUpdate(ChatRole.Assistant, text);
+            update.Contents.Add(new UsageContent(usage));
+            yield return update;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
 }

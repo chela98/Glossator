@@ -115,4 +115,21 @@ public class GlossatorDiagnosticsTests
         Assert.Equal("unit-test", capturedActivity.GetTagItem("book.id"));
         Assert.Equal(2, sectionsDelta);
     }
+
+    [Fact]
+    public void RecordStageUsage_WithCachedInputAndExplicitZeroReasoning_TracksExactStatsAndCacheHitRatio()
+    {
+        GlossatorDiagnostics.ResetSessionStats();
+
+        GlossatorDiagnostics.RecordStageUsage("Reviewer", inputTokens: 10000, billedOutputTokens: 500, visibleOutputTokens: 200, cachedInputTokens: 3000, reasoningTokens: 300);
+        GlossatorDiagnostics.RecordStageUsage("Reviewer", inputTokens: 10000, billedOutputTokens: 400, visibleOutputTokens: 400, cachedInputTokens: 5000, reasoningTokens: 0);
+
+        var stats = GlossatorDiagnostics.GetStageStatsSnapshot()["Reviewer"];
+        Assert.Equal(20000, stats.InputTokens);
+        Assert.Equal(8000, stats.CachedInputTokens);
+        Assert.Equal(300, stats.ReasoningTokens);
+        Assert.Equal(0.4, stats.CacheHitRatio, precision: 4);
+
+        GlossatorDiagnostics.ResetSessionStats();
+    }
 }

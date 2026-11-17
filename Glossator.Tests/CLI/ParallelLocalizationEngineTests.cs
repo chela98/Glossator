@@ -1,4 +1,6 @@
 using System;
+using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -55,16 +57,34 @@ public class ParallelLocalizationEngineTests : IDisposable
         catch { }
     }
 
-    private sealed class ConcurrentRoleChatClient(Func<IReadOnlyList<ChatMessage>, string> responder) : IChatClient
+    private sealed class ConcurrentRoleChatClient : IChatClient
     {
+        private readonly Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<string>> _asyncResponder;
+        private readonly Func<UsageDetails>? _usageFactory;
         private int _callCount;
-        public int CallCount => _callCount;
-        public ConcurrentQueue<string> CapturedUserPrompts { get; } = new();
+
+        public ConcurrentRoleChatClient(
+            Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<string>> asyncResponder,
+            Func<UsageDetails>? usageFactory = null)
+        {
+            _asyncResponder = asyncResponder;
+            _usageFactory = usageFactory;
+        }
+
+        public ConcurrentRoleChatClient(
+            Func<IReadOnlyList<ChatMessage>, string> responder,
+            Func<UsageDetails>? usageFactory = null)
+            : this((msgs, _) => Task.FromResult(responder(msgs)), usageFactory)
+        {
+        }
 
         public ConcurrentRoleChatClient(params string[] queuedResponses)
             : this(CreateQueuedResponder(queuedResponses))
         {
         }
+
+        public int CallCount => _callCount;
+        public ConcurrentQueue<string> CapturedUserPrompts { get; } = new();
 
         private static Func<IReadOnlyList<ChatMessage>, string> CreateQueuedResponder(string[] responses)
         {
@@ -74,7 +94,7 @@ public class ParallelLocalizationEngineTests : IDisposable
 
         public ChatClientMetadata Metadata => new("EngineMock");
 
-        public Task<ChatResponse> GetResponseAsync(
+        public async Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default)
@@ -82,8 +102,13 @@ public class ParallelLocalizationEngineTests : IDisposable
             Interlocked.Increment(ref _callCount);
             var list = messages.ToList();
             CapturedUserPrompts.Enqueue(list.LastOrDefault()?.Text ?? string.Empty);
-            var text = responder(list);
-            return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]));
+            var text = await _asyncResponder(list, cancellationToken);
+            var response = new ChatResponse([new ChatMessage(ChatRole.Assistant, text)]);
+            if (_usageFactory != null)
+            {
+                response.Usage = _usageFactory();
+            }
+            return response;
         }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -95,13 +120,38 @@ public class ParallelLocalizationEngineTests : IDisposable
             Interlocked.Increment(ref _callCount);
             var list = messages.ToList();
             CapturedUserPrompts.Enqueue(list.LastOrDefault()?.Text ?? string.Empty);
-            var text = responder(list);
-            yield return new ChatResponseUpdate(ChatRole.Assistant, text);
+            var text = await _asyncResponder(list, cancellationToken);
+            var update = new ChatResponseUpdate(ChatRole.Assistant, text);
+            if (_usageFactory != null)
+            {
+                update.Contents.Add(new UsageContent(_usageFactory()));
+            }
+            yield return update;
             await Task.Yield();
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
+    }
+
+    private sealed class MockCliStatusResponse(int status) : PipelineResponse
+    {
+        private sealed class EmptyHeaders : PipelineResponseHeaders
+        {
+            public override IEnumerator<KeyValuePair<string, string>> GetEnumerator() => Enumerable.Empty<KeyValuePair<string, string>>().GetEnumerator();
+            public override bool TryGetValue(string name, out string? value) { value = null; return false; }
+            public override bool TryGetValues(string name, out IEnumerable<string>? values) { values = null; return false; }
+        }
+
+        private readonly EmptyHeaders _headers = new();
+        public override int Status => status;
+        public override string ReasonPhrase => string.Empty;
+        protected override PipelineResponseHeaders HeadersCore => _headers;
+        public override BinaryData Content => BinaryData.Empty;
+        public override Stream? ContentStream { get; set; }
+        public override BinaryData BufferContent(CancellationToken cancellationToken = default) => BinaryData.Empty;
+        public override ValueTask<BinaryData> BufferContentAsync(CancellationToken cancellationToken = default) => ValueTask.FromResult(BinaryData.Empty);
+        public override void Dispose() { }
     }
 
     private async Task<(ServiceProvider Provider, SqliteGlossaryRepository Repo, CheckpointStore Store)> BuildServiceProviderAsync(
@@ -572,6 +622,42 @@ public class ParallelLocalizationEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_WhenCachedInputAndReasoningTokensRecorded_RendersCacheHitAndReasoningInReport()
+    {
+        var opfDir = Path.Combine(_tempDir, "cache_report_book");
+        Directory.CreateDirectory(opfDir);
+        File.WriteAllText(Path.Combine(opfDir, "ch01.xhtml"), "<html><body><p>Cache telemetry test.</p></body></html>");
+
+        var styleClient = new ConcurrentRoleChatClient(_ => "Üslup.");
+        var transClient = new ConcurrentRoleChatClient(_ => "[BLOK_000]\nÖnbellek telemetri testi.\n[/BLOK_000]");
+        var revClient = new ConcurrentRoleChatClient(
+            _ => """{"isApproved": true, "patches": []}""",
+            usageFactory: () => new UsageDetails
+            {
+                InputTokenCount = 10_000,
+                CachedInputTokenCount = 3_000,
+                OutputTokenCount = 500,
+                ReasoningTokenCount = 300,
+                TotalTokenCount = 10_500
+            });
+
+        var (sp, _, _) = await BuildServiceProviderAsync(styleClient, transClient, revClient);
+        await using var _sp = sp;
+
+        var engine = new ParallelLocalizationEngine(sp);
+        var ch1 = new EpubItem { Id = "ch1", Href = "ch01.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var package = new EpubPackage { Title = "CacheReportBook", OpfDirectory = opfDir, Spine = [ch1] };
+
+        var output = await RunWithTestConsoleCaptureAsync(() =>
+            engine.RunAsync(package, [ch1], concurrency: 1, isFresh: false, requestedSectionCount: null, isTestMode: false));
+
+        var expectedPct = string.Format(CultureInfo.CurrentCulture, "%{0:F1}", 30.0);
+        Assert.Contains("Önbellek (Cache)", output);
+        Assert.Contains(expectedPct, output);
+        Assert.Contains("300", output);
+    }
+
+    [Fact]
     public async Task RunAsync_WhenBookTitleLegalAddressAndEmailPreservedVerbatim_CompletesWithDoneAndNoPartStuck()
     {
         // Arrange: copyright-page01 ve preface01'de .part takılmasına yol açan gerçek segment kalıpları
@@ -720,5 +806,54 @@ public class ParallelLocalizationEngineTests : IDisposable
         Assert.True(checkpoints.ContainsKey(1));
         Assert.False(File.Exists(Path.Combine(opfDir, "ch01_tr.xhtml.done")));
         Assert.False(File.Exists(Path.Combine(opfDir, "ch01_tr.xhtml")));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenOneChapterFailsWith429UnderConcurrency_IsolatesFailureAndCompletesSiblingChapters()
+    {
+        var opfDir = Path.Combine(_tempDir, "cli_isolated_429");
+        Directory.CreateDirectory(opfDir);
+
+        File.WriteAllText(Path.Combine(opfDir, "ch01.xhtml"), "<html><body><p>AlphaCli chapter text completes safely.</p></body></html>");
+        File.WriteAllText(Path.Combine(opfDir, "ch02.xhtml"), "<html><body><p>BetaCliFailure triggers HTTP 429.</p></body></html>");
+        File.WriteAllText(Path.Combine(opfDir, "ch03.xhtml"), "<html><body><p>GammaCli chapter text completes safely.</p></body></html>");
+
+        var styleClient = new ConcurrentRoleChatClient(_ => "Teknik üslup.");
+        var transClient = new ConcurrentRoleChatClient(async (messages, ct) =>
+        {
+            var prompt = messages.LastOrDefault()?.Text ?? string.Empty;
+            if (prompt.Contains("BetaCliFailure"))
+            {
+                throw new ClientResultException("HTTP 429 (fair_share_limit_exceeded)", new MockCliStatusResponse(429));
+            }
+
+            await Task.Delay(60, ct);
+            ct.ThrowIfCancellationRequested();
+            return prompt.Contains("AlphaCli")
+                ? "[BLOK_000]\nAlfa CLI bölümü tamamlandı.\n[/BLOK_000]"
+                : "[BLOK_000]\nGama CLI bölümü tamamlandı.\n[/BLOK_000]";
+        });
+        var revClient = new ConcurrentRoleChatClient(_ => """{"isApproved": true, "patches": []}""");
+
+        var (sp, _, _) = await BuildServiceProviderAsync(styleClient, transClient, revClient);
+        await using var _sp = sp;
+
+        var engine = new ParallelLocalizationEngine(sp);
+        var ch1 = new EpubItem { Id = "ch1", Href = "ch01.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var ch2 = new EpubItem { Id = "ch2", Href = "ch02.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var ch3 = new EpubItem { Id = "ch3", Href = "ch03.xhtml", MediaType = "application/xhtml+xml", Role = EpubDocumentRole.Chapter };
+        var package = new EpubPackage { Title = "CliIsolated429", OpfDirectory = opfDir, Spine = [ch1, ch2, ch3] };
+
+        var output = await RunWithTestConsoleCaptureAsync(() =>
+            engine.RunAsync(package, [ch1, ch2, ch3], concurrency: 3, isFresh: false, requestedSectionCount: null, isTestMode: false));
+
+        var failed = Assert.Single(engine.LastFailedChapters);
+        Assert.Equal("ch02.xhtml", failed.ChapterFileName);
+        Assert.Contains("429", failed.Message);
+        Assert.Contains("BAŞARISIZ BÖLÜMLER (1)", output);
+        Assert.Contains("ch02.xhtml", output);
+        Assert.True(File.Exists(Path.Combine(opfDir, "ch01_tr.xhtml.done")));
+        Assert.False(File.Exists(Path.Combine(opfDir, "ch02_tr.xhtml.done")));
+        Assert.True(File.Exists(Path.Combine(opfDir, "ch03_tr.xhtml.done")));
     }
 }

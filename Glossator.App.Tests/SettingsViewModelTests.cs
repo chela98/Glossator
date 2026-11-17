@@ -6,6 +6,7 @@ using Glossator.App.Services;
 using Glossator.App.ViewModels;
 using Glossator.Core.Data;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -268,6 +269,104 @@ public sealed class SettingsViewModelTests : IDisposable
         monitor.Update(updated);
 
         Assert.Equal("OpenAI", settingsService.CurrentOptions.ActiveProvider);
+    }
+
+    [Fact]
+    public async Task ConfigureAppConfiguration_UserSettingsOverridesUserSecretsOnInitialLoadAndReload()
+    {
+        var baseDir = Path.Combine(_tempHome, "appbase");
+        Directory.CreateDirectory(baseDir);
+
+        var secretsPath = Path.Combine(_tempHome, "secrets.json");
+        await File.WriteAllTextAsync(secretsPath, """
+            {
+              "GlossatorAi": {
+                "Providers": {
+                  "Evren": {
+                    "ApiKey": "evren-stale-user-secret"
+                  }
+                }
+              }
+            }
+            """);
+
+        var userSettingsPath = GlossatorPaths.GetUserSettingsPath();
+        await File.WriteAllTextAsync(userSettingsPath, """
+            {
+              "GlossatorAi": {
+                "ActiveProvider": "Evren",
+                "Providers": {
+                  "Evren": {
+                    "Endpoint": "https://evren-llmapi.ssyz.org.tr/v1",
+                    "ApiKey": "evren-saved-in-studio-001",
+                    "DefaultModel": "deepseek-v4.1-flash"
+                  }
+                }
+              }
+            }
+            """);
+
+        var configBuilder = new ConfigurationBuilder();
+        App.ConfigureAppConfiguration(
+            configBuilder,
+            "Production",
+            [],
+            basePath: baseDir,
+            userSettingsPath: userSettingsPath,
+            configureUserSecrets: cfg => cfg.AddJsonFile(secretsPath, optional: false, reloadOnChange: false));
+
+        var config = configBuilder.Build();
+        Assert.Equal("evren-saved-in-studio-001", config["GlossatorAi:Providers:Evren:ApiKey"]);
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.Configure<GlossatorAiOptions>(config.GetSection("GlossatorAi"));
+        services.AddSingleton<UserSettingsService>();
+        await using var sp = services.BuildServiceProvider();
+
+        var settingsService = sp.GetRequiredService<UserSettingsService>();
+        var monitor = sp.GetRequiredService<IOptionsMonitor<GlossatorAiOptions>>();
+        Assert.Equal("evren-saved-in-studio-001", monitor.CurrentValue.Providers["Evren"].ApiKey);
+
+        var updatedProviders = new Dictionary<string, AiProviderOptions>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Evren"] = new()
+            {
+                Endpoint = "https://evren-llmapi.ssyz.org.tr/v1",
+                ApiKey = "evren-rotated-new-key-002",
+                DefaultModel = "deepseek-v4.1-flash"
+            }
+        };
+
+        await settingsService.SaveAiSettingsAsync("Evren", updatedProviders, new Dictionary<string, AgentRoleOptions>());
+        config.Reload();
+
+        Assert.Equal("evren-rotated-new-key-002", monitor.CurrentValue.Providers["Evren"].ApiKey);
+    }
+
+    [Fact]
+    public void ConfigureAppConfiguration_DefaultChainPlacesUserSecretsBeforeUserSettings()
+    {
+        var baseDir = Path.Combine(_tempHome, "appbase_default");
+        Directory.CreateDirectory(baseDir);
+
+        var builder = new ConfigurationBuilder();
+        App.ConfigureAppConfiguration(builder, "Development", [], basePath: baseDir);
+        var root = (IConfigurationRoot)builder.Build();
+
+        var providerPaths = root.Providers
+            .OfType<Microsoft.Extensions.Configuration.Json.JsonConfigurationProvider>()
+            .Select(p => p.Source.Path ?? string.Empty)
+            .ToList();
+
+        var secretsIdx = providerPaths.FindIndex(p => p.EndsWith("secrets.json", StringComparison.OrdinalIgnoreCase));
+        var userSettingsIdx = providerPaths.FindIndex(p => p.EndsWith("user_settings.json", StringComparison.OrdinalIgnoreCase));
+
+        Assert.True(userSettingsIdx >= 0, "user_settings.json provider should be registered.");
+        if (secretsIdx >= 0)
+        {
+            Assert.True(userSettingsIdx > secretsIdx, "user_settings.json must override User Secrets.");
+        }
     }
 
     private static SettingsViewModel CreateViewModel(GlossatorAiOptions options, IProviderDiscoveryService discoveryService)

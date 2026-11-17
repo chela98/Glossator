@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Net;
 using System.Runtime.CompilerServices;
+using Glossator.AI.Clients;
 using Glossator.AI.Diagnostics;
 using Glossator.AI.Models;
 using Glossator.AI.Streaming;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Glossator.Tests.AI;
@@ -344,6 +347,198 @@ public class StreamingChatHelperTests
             await Task.Yield();
             cancellationToken.ThrowIfCancellationRequested();
             yield return new ChatResponseUpdate(ChatRole.Assistant, "second");
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task StreamResponseAsync_WithServerZeroReasoningTokenCount_UsesServerOutputTokensInsteadOfCharsHeuristic()
+    {
+        GlossatorDiagnostics.ResetSessionStats();
+
+        // Kısa/yoğun Türkçe yanıt (~40 krk -> chars/4=10, ancak sunucu 25 çıktı + 0 reasoning bildiriyor)
+        var usage = new UsageDetails
+        {
+            InputTokenCount = 8027,
+            OutputTokenCount = 25,
+            ReasoningTokenCount = 0,
+            TotalTokenCount = 8052
+        };
+        var update = new ChatResponseUpdate(ChatRole.Assistant, "Kısa Türkçe metin.");
+        update.Contents.Add(new UsageContent(usage));
+        var client = new CustomUpdatesChatClient([update]);
+
+        using var activitySource = new ActivitySource("Glossator.Tests.ZeroReasoning");
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == "Glossator.Tests.ZeroReasoning",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var activity = activitySource.StartActivity("ZeroReasoningActivity");
+        Assert.NotNull(activity);
+
+        var result = await StreamingChatHelper.StreamResponseAsync(
+            client,
+            [new ChatMessage(ChatRole.User, "Translate")],
+            stageName: "Translator",
+            activity: activity);
+
+        Assert.Equal(8027, result.InputTokens);
+        Assert.Equal(25, result.OutputTokens);
+        Assert.Equal(25, result.BilledOutputTokens);
+        Assert.Equal(0, result.ReasoningTokens);
+        Assert.Equal(0L, activity.GetTagItem("gen_ai.usage.reasoning_tokens"));
+        Assert.Equal(25L, activity.GetTagItem("gen_ai.usage.text_tokens"));
+        Assert.Equal(25L, activity.GetTagItem("gen_ai.usage.output_tokens"));
+        Assert.Equal(0, GlossatorDiagnostics.GetStageStatsSnapshot()["Translator"].ReasoningTokens);
+    }
+
+    [Fact]
+    public async Task StreamResponseAsync_WithFirstClassReasoningAndCachedInputTokens_SeparatesTtfcFromTtftAndRecordsCacheHit()
+    {
+        GlossatorDiagnostics.ResetSessionStats();
+
+        var client = new ReasoningDelayThenTextClient(
+            preTextDelayMs: 65,
+            finalUsage: new UsageDetails
+            {
+                InputTokenCount = 10276,
+                CachedInputTokenCount = 3072,
+                OutputTokenCount = 553,
+                ReasoningTokenCount = 304,
+                TotalTokenCount = 10829
+            });
+
+        using var activitySource = new ActivitySource("Glossator.Tests.CacheAndTtfc");
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == "Glossator.Tests.CacheAndTtfc",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var activity = activitySource.StartActivity("CacheAndTtfcActivity");
+        Assert.NotNull(activity);
+
+        var result = await StreamingChatHelper.StreamResponseAsync(
+            client,
+            [new ChatMessage(ChatRole.User, "Review")],
+            stageName: "Reviewer",
+            activity: activity);
+
+        Assert.Equal(10276, result.InputTokens);
+        Assert.Equal(3072, result.CachedInputTokens);
+        Assert.Equal(304, result.ReasoningTokens);
+        Assert.Equal(249, result.OutputTokens);
+        Assert.Equal(553, result.BilledOutputTokens);
+        Assert.True(result.TimeToFirstChunkMs >= 0);
+        Assert.True(result.TimeToFirstTokenMs > result.TimeToFirstChunkMs,
+            $"Expected visible TTFT ({result.TimeToFirstTokenMs}ms) > first reasoning chunk TTFC ({result.TimeToFirstChunkMs}ms)");
+        Assert.Equal(3072L, activity.GetTagItem("gen_ai.usage.cache_read_tokens"));
+        Assert.Equal(304L, activity.GetTagItem("gen_ai.usage.reasoning_tokens"));
+        Assert.Contains("Cache: 3", result.FormatSummary());
+
+        var stats = GlossatorDiagnostics.GetStageStatsSnapshot()["Reviewer"];
+        Assert.Equal(3072, stats.CachedInputTokens);
+        Assert.Equal(304, stats.ReasoningTokens);
+        Assert.Equal(249, stats.VisibleOutputTokens);
+    }
+
+    [Fact]
+    public async Task StreamResponseAsync_WithResilience503Retry_ExcludesRetryBackoffFromActiveModelTtft()
+    {
+        var attemptCount = 0;
+        var transientClient = new TransientThenSuccessStreamingClient(
+            onAttempt: attempt =>
+            {
+                attemptCount = attempt;
+                if (attempt == 1)
+                {
+                    throw new HttpRequestException("Service Unavailable", null, HttpStatusCode.ServiceUnavailable);
+                }
+            });
+
+        var resilientClient = new ResilienceChatClient(
+            transientClient,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(200));
+
+        using var activitySource = new ActivitySource("Glossator.Tests.RetryTtft");
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == "Glossator.Tests.RetryTtft",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var activity = activitySource.StartActivity("RetryTtftActivity");
+        Assert.NotNull(activity);
+
+        var result = await StreamingChatHelper.StreamResponseAsync(
+            resilientClient,
+            [new ChatMessage(ChatRole.User, "Retry TTFT")],
+            stageName: "Translator",
+            activity: activity);
+
+        var retryWaitMs = Convert.ToInt64(activity.GetTagItem("gen_ai.retry.wait_ms"));
+        var e2eTtftMs = Convert.ToInt64(activity.GetTagItem("gen_ai.response.e2e_ttft_ms"));
+
+        Assert.Equal(2, attemptCount);
+        Assert.Equal(1, activity.GetTagItem("gen_ai.retry.count"));
+        Assert.True(retryWaitMs >= 160, $"Expected retry wait >=160ms, observed {retryWaitMs}ms");
+        Assert.True(e2eTtftMs >= retryWaitMs, $"Expected e2e TTFT ({e2eTtftMs}ms) >= retry wait ({retryWaitMs}ms)");
+        Assert.True(result.TimeToFirstTokenMs + 80 <= e2eTtftMs,
+            $"Expected active TTFT ({result.TimeToFirstTokenMs}ms) to exclude 200ms retry sleep from e2e TTFT ({e2eTtftMs}ms)");
+    }
+
+    private sealed class ReasoningDelayThenTextClient(int preTextDelayMs, UsageDetails finalUsage) : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("ReasoningDelayMock");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, string.Empty);
+            await Task.Delay(preTextDelayMs, cancellationToken);
+
+            var final = new ChatResponseUpdate(ChatRole.Assistant, "{\"isApproved\": true, \"patches\": []}");
+            final.Contents.Add(new UsageContent(finalUsage));
+            yield return final;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    private sealed class TransientThenSuccessStreamingClient(Action<int> onAttempt) : IChatClient
+    {
+        private int _attempt;
+        public ChatClientMetadata Metadata => new("TransientRetryMock");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            var current = ++_attempt;
+            onAttempt(current);
+            return StreamSuccessAsync(cancellationToken);
+        }
+
+        private static async IAsyncEnumerable<ChatResponseUpdate> StreamSuccessAsync(
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            ct.ThrowIfCancellationRequested();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "[BLOK_001] Tamam. [/BLOK_001]");
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;

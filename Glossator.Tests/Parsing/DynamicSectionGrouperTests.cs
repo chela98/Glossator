@@ -214,4 +214,32 @@ public class DynamicSectionGrouperTests
         Assert.Equal(60, sec.Title.Length);
         Assert.EndsWith("...", sec.Title);
     }
+
+    [Fact]
+    public void Group_WithInlineHtmlAnchorsAndEntitiesInHeading_StripsTagsBeforeTruncating()
+    {
+        // Arrange
+        var segments = new List<HtmlSegment>
+        {
+            new()
+            {
+                Index = 0,
+                TagName = "h2",
+                MaskedText = "<a class=\"h_ident\" id=\"h-ygn12/ieo+\" href=\"#h-ygn12/ieo+\"></a>Expressions &amp; Operators"
+            },
+            new()
+            {
+                Index = 1,
+                TagName = "p",
+                MaskedText = "Sample paragraph."
+            }
+        };
+
+        // Act
+        var sections = HtmlSectionGrouper.Group(segments, "ch07");
+
+        // Assert
+        var sec = Assert.Single(sections);
+        Assert.Equal("Expressions & Operators", sec.Title);
+    }
 }

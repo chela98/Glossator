@@ -70,4 +70,54 @@ public class ReasoningEffortMappingTests
 
         Assert.NotNull(discovery);
     }
+
+    [Fact]
+    public async Task ReasoningEffortChatClient_InjectsEffortInResponseAndStreamingWithoutMutatingCallerOptions()
+    {
+        var captureClient = new CapturingChatClient();
+        var client = new Glossator.AI.Clients.ReasoningEffortChatClient(captureClient, "low");
+        var callerOptions = new ChatOptions { Temperature = 0.2f };
+
+        await client.GetResponseAsync([new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, "Ping")], callerOptions);
+        await foreach (var _ in client.GetStreamingResponseAsync([new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, "Stream")], callerOptions))
+        {
+        }
+
+        Assert.Null(callerOptions.AdditionalProperties);
+        Assert.Equal(2, captureClient.CapturedOptions.Count);
+        foreach (var opt in captureClient.CapturedOptions)
+        {
+            Assert.NotNull(opt);
+            Assert.Equal("low", opt.AdditionalProperties?["reasoning_effort"]);
+            var raw = Assert.IsType<ChatCompletionOptions>(opt.RawRepresentationFactory?.Invoke(client));
+#pragma warning disable OPENAI001
+            Assert.Equal(ChatReasoningEffortLevel.Low, raw.ReasoningEffortLevel);
+#pragma warning restore OPENAI001
+        }
+    }
+
+    private sealed class CapturingChatClient : IChatClient
+    {
+        public List<ChatOptions?> CapturedOptions { get; } = [];
+        public ChatClientMetadata Metadata => new("Capture");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            CapturedOptions.Add(options);
+            return Task.FromResult(new ChatResponse([new Microsoft.Extensions.AI.ChatMessage(ChatRole.Assistant, "ok")]));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            CapturedOptions.Add(options);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "ok");
+            await Task.CompletedTask;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
 }

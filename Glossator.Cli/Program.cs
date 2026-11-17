@@ -230,22 +230,11 @@ try
     var activeBookEntry = await RecentBooksManager.RegisterOrUpdateAsync(bookPath, package, cts.Token);
 
     // 4. Modern .NET 10 HostApplicationBuilder ve DI Altyapısı
-    var userSettingsPath = GlossatorPaths.GetUserSettingsPath();
     var hostBuilder = Host.CreateApplicationBuilder();
-    var envName = hostBuilder.Environment.EnvironmentName;
-    var configArgs = args
-        .Where(a => a.Contains('=', StringComparison.Ordinal) || a.StartsWith('/'))
-        .ToArray();
-    hostBuilder.Configuration.Sources.Clear();
-    hostBuilder.Configuration
-        .SetBasePath(AppContext.BaseDirectory)
-        .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
-        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-        .AddJsonFile($"appsettings.{envName}.json", optional: true, reloadOnChange: true)
-        .AddJsonFile(userSettingsPath, optional: true, reloadOnChange: true)
-        .AddUserSecrets<Program>(optional: true)
-        .AddEnvironmentVariables()
-        .AddCommandLine(configArgs);
+    CliHostConfiguration.Configure(
+        hostBuilder.Configuration,
+        hostBuilder.Environment.EnvironmentName,
+        args);
 
     var config = hostBuilder.Configuration;
 
@@ -443,7 +432,7 @@ try
         try
         {
             await engine.RunAsync(package, targetChapters, concurrency, isFresh, requestedSectionCount, isTestMode, cts.Token);
-            return 0;
+            return engine.LastFailedChapters.Count > 0 ? 1 : 0;
         }
         catch (Exception ex)
         {

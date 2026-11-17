@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 
 namespace Glossator.Core.Parsing;
@@ -144,6 +145,8 @@ public static class HtmlSectionGrouper
         if (string.IsNullOrWhiteSpace(maskedText)) return "Başlıksız Bölüm";
 
         var clean = Regex.Replace(maskedText, @"⟦PH_\d+⟧|\[\[(?:CODE|INDEX)_\d+\]\]", " ");
+        clean = Regex.Replace(clean, @"<[^>]+>", " ");
+        clean = WebUtility.HtmlDecode(clean);
         clean = Regex.Replace(clean, @"\s+", " ").Trim();
 
         if (clean.Length > 60)

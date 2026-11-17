@@ -132,7 +132,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 Content: "İlk redaksiyon yanıtı JSON olarak ayrıştırılamadı. Modelden çıktısını temiz JSON formatında onarması isteniyor...",
                 Attempt: state.AttemptCount));
 
-            patchResult = await TrySelfRepairJsonAsync(rawResponse, state.AttemptCount, activity, cancellationToken)
+            patchResult = await TrySelfRepairJsonAsync(rawResponse, state.AttemptCount, cancellationToken)
                 .ConfigureAwait(false);
             if (patchResult != null)
             {
@@ -272,9 +272,10 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
     private async Task<ReviewerPatchResult?> TrySelfRepairJsonAsync(
         string brokenResponse,
         int attempt,
-        System.Diagnostics.Activity? activity,
         CancellationToken cancellationToken)
     {
+        using var repairActivity = Glossator.AI.Diagnostics.GlossatorDiagnostics.ActivitySource.StartActivity("ReviewerJsonRepair");
+        repairActivity?.SetTag("agent.attempt", attempt);
         try
         {
             var repairPrompt = $$"""
@@ -307,7 +308,7 @@ public sealed class ReviewerExecutor : Executor<TranslationReviewState, Translat
                 repairMessages,
                 stageName: "Reviewer",
                 attempt: attempt,
-                activity: activity,
+                activity: repairActivity,
                 stepLogger: _stepLogger,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
 

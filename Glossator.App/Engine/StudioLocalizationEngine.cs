@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
+using Glossator.AI.Clients;
 using Glossator.AI.Diagnostics;
 using Glossator.AI.Extensions;
 using Glossator.AI.Workflows;
@@ -29,13 +30,22 @@ public sealed record StudioProgressUpdate(
     double OverallPercentage,
     ChapterTranslationState? ChapterState = null);
 
+public sealed record ChapterFailureInfo(
+    string ChapterHref,
+    string ChapterFileName,
+    string Message);
+
 public sealed record StudioSessionSummary(
     TimeSpan Elapsed,
     long ChaptersCompleted,
     long SectionsCompleted,
     long PatchesApplied,
     long Rejections,
-    IReadOnlyDictionary<string, StageUsageStats> StageStats);
+    IReadOnlyDictionary<string, StageUsageStats> StageStats,
+    IReadOnlyList<ChapterFailureInfo>? FailedChapters = null)
+{
+    public IReadOnlyList<ChapterFailureInfo> FailedChapters { get; init; } = FailedChapters ?? [];
+}
 
 public sealed class StudioLocalizationEngine(
     IServiceProvider rootServiceProvider,
@@ -77,6 +87,7 @@ public sealed class StudioLocalizationEngine(
 
         int completedChaptersCount = 0;
         var chapterFractions = new ConcurrentDictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var failedChapters = new ConcurrentQueue<ChapterFailureInfo>();
 
         void Report(string chapterHref, string chapterFileName, string stage, string msg, int secDone, int secTotal, ChapterTranslationState? chapterState = null)
         {
@@ -302,20 +313,28 @@ public sealed class StudioLocalizationEngine(
                     LogMessageReceived?.Invoke($"[Uyarı] '{chapterFileName}' kısmi (.part) kaydedildi ({untranslatedCount} çevrilmemiş blok veya kesit/test limiti).");
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || ct.IsCancellationRequested)
             {
                 LogMessageReceived?.Invoke($"[İptal] '{chapterFileName}' durduruldu.");
                 var currentState = DocumentTranslationStatus.GetState(package.OpfDirectory, chapterHref);
                 Report(chapterHref, chapterFileName, "Durduruldu", $"{chapterFileName} iptal edildi.", 0, 1, currentState);
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (AiExceptionClassifier.IsFatalConfigurationOrAuth(ex))
             {
-                _logger.LogError(ex, "Chapter '{Chapter}' failed during localization.", chapterFileName);
-                LogMessageReceived?.Invoke($"[Hata] '{chapterFileName}' başarısız: {ex.Message}");
+                _logger.LogError(ex, "Fatal configuration or auth failure on chapter '{Chapter}'. Stopping all workers.", chapterFileName);
+                LogMessageReceived?.Invoke($"[Kritik Hata] '{chapterFileName}': {ex.Message}");
                 var currentState = DocumentTranslationStatus.GetState(package.OpfDirectory, chapterHref);
                 Report(chapterHref, chapterFileName, "Hata", ex.Message, 0, 1, currentState);
                 throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Chapter '{Chapter}' failed during localization (isolated from sibling workers).", chapterFileName);
+                LogMessageReceived?.Invoke($"[Hata] '{chapterFileName}' başarısız (diğer bölümler devam ediyor): {ex.Message}");
+                failedChapters.Enqueue(new ChapterFailureInfo(chapterHref, chapterFileName, ex.Message));
+                var currentState = DocumentTranslationStatus.GetState(package.OpfDirectory, chapterHref);
+                Report(chapterHref, chapterFileName, "Hata", ex.Message, 0, 1, currentState);
             }
             finally
             {
@@ -332,16 +351,19 @@ public sealed class StudioLocalizationEngine(
         });
 
         sessionStopwatch.Stop();
-        return BuildSummary(sessionStopwatch.Elapsed);
+        return BuildSummary(sessionStopwatch.Elapsed, failedChapters.ToList());
     }
 
     public static StudioSessionSummary BuildCurrentSessionSummary(TimeSpan elapsed) => BuildSummary(elapsed);
 
-    private static StudioSessionSummary BuildSummary(TimeSpan elapsed) => new(
+    private static StudioSessionSummary BuildSummary(
+        TimeSpan elapsed,
+        IReadOnlyList<ChapterFailureInfo>? failedChapters = null) => new(
         elapsed,
         GlossatorDiagnostics.SessionChaptersCompleted,
         GlossatorDiagnostics.SessionSectionsCompleted,
         GlossatorDiagnostics.SessionPatchesApplied,
         GlossatorDiagnostics.SessionRejections,
-        GlossatorDiagnostics.GetStageStatsSnapshot());
+        GlossatorDiagnostics.GetStageStatsSnapshot(),
+        failedChapters);
 }

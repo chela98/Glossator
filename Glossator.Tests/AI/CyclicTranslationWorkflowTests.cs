@@ -209,6 +209,28 @@ public class CyclicTranslationWorkflowTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhenTransient503CapacityExhaustedOccurs_PropagatesAndLogsSingleFailureEntry()
+    {
+        var logs = new List<PipelineStepLog>();
+        var exhaustedClient = new QueuedChatClient(new Queue<Func<IReadOnlyList<ChatMessage>, string>>(
+            [_ => throw new ClientResultException("HTTP 503 (api_error: model_capacity_exhausted)", new MockStatusResponse(503))]));
+
+        var workflow = new CyclicTranslationWorkflow(
+            exhaustedClient, exhaustedClient, exhaustedClient,
+            "S", "T", "R",
+            stepLogger: log => logs.Add(log));
+
+        await Assert.ThrowsAsync<ClientResultException>(() =>
+            workflow.ExecuteAsync(
+                "[BLOK_001]\nTest\n[/BLOK_001]",
+                [],
+                styleGuide: "Hazır"));
+
+        Assert.Equal(1, exhaustedClient.CallCount);
+        Assert.Single(logs, l => l.Stage == "CyclicWorkflow" && l.Summary.Contains("503"));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenCancelledInsideExecutor_PropagatesOperationCanceledException()
     {
         using var cts = new CancellationTokenSource();

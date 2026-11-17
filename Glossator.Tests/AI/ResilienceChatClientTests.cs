@@ -2,8 +2,12 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Diagnostics;
 using System.Net;
+using System.Runtime.CompilerServices;
+using System.Threading.RateLimiting;
 using Glossator.AI.Clients;
+using Glossator.AI.RateLimiting;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -246,7 +250,7 @@ public class ResilienceChatClientTests
             client.GetResponseAsync([new ChatMessage(ChatRole.User, "Hello")]));
 
         Assert.Contains("503", ex.Message);
-        Assert.Equal(3, attemptCount); // maxRetries = 3 kez denendi ve fırlatıldı
+        Assert.Equal(4, attemptCount); // 1 ilk deneme + maxRetries=3 yeniden deneme = 4 toplam deneme
     }
 
     [Fact]
@@ -311,6 +315,10 @@ public class ResilienceChatClientTests
         Assert.All(updates.Take(3), u => Assert.DoesNotContain(u.Contents, c => c is UsageContent));
         var finalUsage = Assert.IsType<UsageContent>(Assert.Single(updates[3].Contents));
         Assert.Equal(300L, finalUsage.Details.AdditionalCounts!["OutputTokenDetails.ReasoningTokenCount"]);
+        Assert.Equal(300L, finalUsage.Details.ReasoningTokenCount);
+#pragma warning disable MEAI001
+        Assert.Equal(150L, finalUsage.Details.OutputTextTokenCount);
+#pragma warning restore MEAI001
         Assert.NotEmpty(capturedActivities);
         var otelSpan = capturedActivities.Last();
         Assert.Equal(1000L, Convert.ToInt64(otelSpan.GetTagItem("gen_ai.usage.input_tokens")));
@@ -461,6 +469,144 @@ public class ResilienceChatClientTests
             client.GetResponseAsync([new ChatMessage(ChatRole.User, "Test")]));
 
         Assert.Equal(1, attemptCount);
+    }
+
+    [Fact]
+    public void ComputeRetryDelay_WhenSameRetryAfterRepeats_EscalatesNextBackoffAndAppliesJitter()
+    {
+        var raw = new MockPipelineResponse(503, new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Retry-After"] = "15"
+        });
+        var ex = new ClientResultException("Service Unavailable", raw);
+
+        var firstDelay = ResilienceChatClient.ComputeRetryDelay(ex, TimeSpan.FromSeconds(2), out var afterFirst);
+        var secondDelay = ResilienceChatClient.ComputeRetryDelay(ex, afterFirst, out var afterSecond);
+
+        Assert.InRange(firstDelay.TotalSeconds, 15.0, 15.6);
+        Assert.InRange(afterFirst.TotalSeconds, 30.0, 30.6);
+        Assert.InRange(secondDelay.TotalSeconds, 30.0, 30.6);
+        Assert.Equal(60.0, afterSecond.TotalSeconds, precision: 2);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_When503Persists_PerformsTrueThreeRetriesForFourTotalAttempts()
+    {
+        var attemptCount = 0;
+        var inner = new MockChatClient(
+            handler: (_, _, _) => Task.FromResult(new ChatResponse([])),
+            streamingHandler: (_, _, _) =>
+            {
+                attemptCount++;
+                var raw = new MockPipelineResponse(503);
+                throw new ClientResultException("HTTP 503 (api_error: model_capacity_exhausted)", raw);
+            });
+
+        var client = new ResilienceChatClient(
+            inner,
+            NullLogger<ResilienceChatClient>.Instance,
+            maxRetries: 3,
+            initialDelay: TimeSpan.FromMilliseconds(2));
+
+        await Assert.ThrowsAsync<ClientResultException>(async () =>
+        {
+            await foreach (var _ in client.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Hi")]))
+            {
+            }
+        });
+
+        Assert.Equal(4, attemptCount);
+    }
+
+    [Fact]
+    public async Task StreamingPipeline_WithRateLimiterAndReasoningEffortOn503_LeavesZeroUnobservedExceptionsAndLogsAccurateStatus()
+    {
+        var unobserved = new List<Exception>();
+        EventHandler<UnobservedTaskExceptionEventArgs> unobservedHandler = (_, e) =>
+        {
+            unobserved.Add(e.Exception);
+            e.SetObserved();
+        };
+        TaskScheduler.UnobservedTaskException += unobservedHandler;
+
+        try
+        {
+            using var limiter = new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+            {
+                TokenLimit = 20,
+                TokensPerPeriod = 20,
+                ReplenishmentPeriod = TimeSpan.FromSeconds(1),
+                QueueLimit = 20
+            });
+            var logger = new CaptureLogger<ResilienceChatClient>();
+            var inner = new AsyncThrowing503StreamingClient();
+
+            using var pipeline = inner.AsBuilder()
+                .UseOpenTelemetry(configure: cfg => cfg.EnableSensitiveData = false)
+                .UseLogging(NullLoggerFactory.Instance)
+                .Use(c => new ResilienceChatClient(c, logger, maxRetries: 2, initialDelay: TimeSpan.FromMilliseconds(5)))
+                .UseRateLimiting(limiter)
+                .Use(c => new ReasoningEffortChatClient(c, "low"))
+                .Build();
+
+            await Assert.ThrowsAsync<ClientResultException>(async () =>
+            {
+                await foreach (var _ in pipeline.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "Test 503")]))
+                {
+                }
+            });
+
+            await Task.Delay(25);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.Empty(unobserved);
+            Assert.Equal(2, logger.Warnings.Count);
+            Assert.All(logger.Warnings, msg =>
+            {
+                Assert.Contains("HTTP 503", msg);
+                Assert.DoesNotContain("429", msg);
+            });
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= unobservedHandler;
+        }
+    }
+
+    private sealed class CaptureLogger<T> : ILogger<T>
+    {
+        public List<string> Warnings { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => logLevel == LogLevel.Warning;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
+    }
+
+    private sealed class AsyncThrowing503StreamingClient : IChatClient
+    {
+        public ChatClientMetadata Metadata => new("AsyncThrowing503");
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotImplementedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            throw new ClientResultException("HTTP 503 (api_error: model_capacity_exhausted)", new MockPipelineResponse(503));
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
     }
 
     private sealed class MockPipelineResponse(int status, Dictionary<string, string>? headers = null) : PipelineResponse

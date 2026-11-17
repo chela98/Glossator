@@ -141,29 +141,11 @@ public static class AiServiceExtensions
             }
 
             // Eğer reasoning_effort tanımlanmışsa (örn: "none", "minimal", "low", "medium", "high", "xhigh"),
-            // en iç katmanda doğrudan OpenAI SDK ChatCompletionOptions.ReasoningEffortLevel üzerinden enjekte et
+            // doğrudan DelegatingChatClient üzerinden OpenAI SDK ChatCompletionOptions.ReasoningEffortLevel enjekte et
             if (agentConfig != null && !string.IsNullOrWhiteSpace(agentConfig.ReasoningEffort))
             {
                 var effort = agentConfig.ReasoningEffort.Trim();
-                builder.Use((messages, chatOptions, next, ct) =>
-                {
-                    chatOptions ??= new ChatOptions();
-                    chatOptions.AdditionalProperties ??= new AdditionalPropertiesDictionary();
-                    chatOptions.AdditionalProperties["reasoning_effort"] = effort;
-
-                    var prevFactory = chatOptions.RawRepresentationFactory;
-                    chatOptions.RawRepresentationFactory = client =>
-                    {
-                        var raw = prevFactory?.Invoke(client) as OpenAI.Chat.ChatCompletionOptions
-                                  ?? new OpenAI.Chat.ChatCompletionOptions();
-#pragma warning disable OPENAI001
-                        raw.ReasoningEffortLevel = MapReasoningEffortLevel(effort);
-#pragma warning restore OPENAI001
-                        return raw;
-                    };
-
-                    return next(messages, chatOptions, ct);
-                });
+                builder.Use(c => new Glossator.AI.Clients.ReasoningEffortChatClient(c, effort));
             }
 
             return builder.Build(sp);

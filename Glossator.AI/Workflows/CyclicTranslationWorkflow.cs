@@ -1,4 +1,6 @@
 using System.ClientModel;
+using System.Runtime.ExceptionServices;
+using Glossator.AI.Clients;
 using Glossator.AI.Executors;
 using Glossator.AI.Models;
 using Microsoft.Agents.AI.Workflows;
@@ -89,6 +91,7 @@ public sealed class CyclicTranslationWorkflow
             Feedback: null,
             AttemptCount: 1);
 
+        bool propagationLogged = false;
         try
         {
             var workflow = CreateWorkflow();
@@ -114,16 +117,17 @@ public sealed class CyclicTranslationWorkflow
 
                 if (unwrapped is OperationCanceledException && cancellationToken.IsCancellationRequested)
                 {
-                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unwrapped);
+                    ExceptionDispatchInfo.Throw(unwrapped);
                 }
 
-                if (IsFatalConfigurationOrAuthException(unwrapped))
+                if (ShouldPropagateInsteadOfEmptyFallback(unwrapped, cancellationToken, out var logSummary))
                 {
+                    propagationLogged = true;
                     _stepLogger?.Invoke(new PipelineStepLog(
                         Stage: "CyclicWorkflow",
-                        Summary: $"Sağlayıcı Kimlik/Yapılandırma Hatası: {unwrapped.Message}",
+                        Summary: logSummary,
                         Content: unwrapped.ToString()));
-                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(unwrapped);
+                    ExceptionDispatchInfo.Throw(unwrapped);
                 }
 
                 _stepLogger?.Invoke(new PipelineStepLog(
@@ -147,13 +151,16 @@ public sealed class CyclicTranslationWorkflow
         {
             throw; // İptal sinyali derhal yukarı iletilir, yutulmaz
         }
-        catch (Exception ex) when (IsFatalConfigurationOrAuthException(ex))
+        catch (Exception ex) when (ShouldPropagateInsteadOfEmptyFallback(ex, cancellationToken, out var logSummary))
         {
-            _stepLogger?.Invoke(new PipelineStepLog(
-                Stage: "CyclicWorkflow",
-                Summary: $"Sağlayıcı Kimlik/Yapılandırma Hatası: {ex.Message}",
-                Content: ex.ToString()));
-            throw; // 401/403/400 gibi ölümcül yetki/konfig hatalarını yedek fallback'te tekrar tekrar yakma
+            if (!propagationLogged)
+            {
+                _stepLogger?.Invoke(new PipelineStepLog(
+                    Stage: "CyclicWorkflow",
+                    Summary: logSummary,
+                    Content: ex.ToString()));
+            }
+            throw; // 401/403 kimlik hatası veya retry'ları tükenmiş 503/429 kapasite çöküşü yedek fallback'te tekrar yakılmaz
         }
         catch (Exception ex)
         {
@@ -176,22 +183,24 @@ public sealed class CyclicTranslationWorkflow
         return current;
     }
 
-    private static bool IsFatalConfigurationOrAuthException(Exception ex)
+    private static bool ShouldPropagateInsteadOfEmptyFallback(
+        Exception ex,
+        CancellationToken cancellationToken,
+        out string logSummary)
     {
-        for (var current = ex; current != null; current = current.InnerException)
+        if (AiExceptionClassifier.IsFatalConfigurationOrAuth(ex))
         {
-            if (current is ClientResultException cre && cre.Status is 400 or 401 or 403 or 404 or 422)
-            {
-                return true;
-            }
-
-            if (current is HttpRequestException hre && hre.StatusCode.HasValue
-                && (int)hre.StatusCode.Value is 400 or 401 or 403 or 404 or 422)
-            {
-                return true;
-            }
+            logSummary = $"Sağlayıcı Kimlik/Yapılandırma Hatası: {ex.Message}";
+            return true;
         }
 
+        if (AiExceptionClassifier.IsTransient(ex, cancellationToken))
+        {
+            logSummary = $"Sağlayıcı Kapasite/Bağlantı Hatası (Yeniden Denemeler Tükendi): {ex.Message}";
+            return true;
+        }
+
+        logSummary = string.Empty;
         return false;
     }
 }

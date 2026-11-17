@@ -8,10 +8,25 @@ public sealed class StageUsageStats
 {
     public long Calls;
     public long InputTokens;
+    public long CachedInputTokens;
     public long BilledOutputTokens;
     public long VisibleOutputTokens;
+    public long RecordedReasoningTokens;
+    internal long ExplicitReasoningCalls;
 
-    public long ReasoningTokens => Math.Max(0, BilledOutputTokens - VisibleOutputTokens);
+    public long ReasoningTokens => Interlocked.Read(ref ExplicitReasoningCalls) > 0
+        ? Interlocked.Read(ref RecordedReasoningTokens)
+        : Math.Max(0, Interlocked.Read(ref BilledOutputTokens) - Interlocked.Read(ref VisibleOutputTokens));
+
+    public double CacheHitRatio
+    {
+        get
+        {
+            var input = Interlocked.Read(ref InputTokens);
+            var cached = Interlocked.Read(ref CachedInputTokens);
+            return input > 0 ? Math.Min(1.0, (double)cached / input) : 0.0;
+        }
+    }
 }
 
 public static class GlossatorDiagnostics
@@ -70,14 +85,31 @@ public static class GlossatorDiagnostics
         Interlocked.Exchange(ref _sessionChaptersCompleted, 0);
     }
 
-    public static void RecordStageUsage(string stageName, long inputTokens, long billedOutputTokens, long visibleOutputTokens)
+    public static void RecordStageUsage(
+        string stageName,
+        long inputTokens,
+        long billedOutputTokens,
+        long visibleOutputTokens,
+        long cachedInputTokens = 0,
+        long? reasoningTokens = null)
     {
         var key = string.IsNullOrWhiteSpace(stageName) ? "Other" : stageName;
         var stats = _stageStats.GetOrAdd(key, _ => new StageUsageStats());
+        var safeInput = Math.Max(0, inputTokens);
+        var safeCached = Math.Clamp(cachedInputTokens, 0, safeInput);
+        var safeBilled = Math.Max(0, billedOutputTokens);
+        var safeVisible = Math.Max(0, visibleOutputTokens);
+        var resolvedReasoning = reasoningTokens.HasValue
+            ? Math.Max(0, reasoningTokens.Value)
+            : Math.Max(0, safeBilled - safeVisible);
+
         Interlocked.Increment(ref stats.Calls);
-        Interlocked.Add(ref stats.InputTokens, Math.Max(0, inputTokens));
-        Interlocked.Add(ref stats.BilledOutputTokens, Math.Max(0, billedOutputTokens));
-        Interlocked.Add(ref stats.VisibleOutputTokens, Math.Max(0, visibleOutputTokens));
+        Interlocked.Add(ref stats.InputTokens, safeInput);
+        Interlocked.Add(ref stats.CachedInputTokens, safeCached);
+        Interlocked.Add(ref stats.BilledOutputTokens, safeBilled);
+        Interlocked.Add(ref stats.VisibleOutputTokens, safeVisible);
+        Interlocked.Add(ref stats.RecordedReasoningTokens, resolvedReasoning);
+        Interlocked.Increment(ref stats.ExplicitReasoningCalls);
     }
 
     public static void RecordPatchesApplied(int count) => Interlocked.Add(ref _sessionPatchesApplied, count);

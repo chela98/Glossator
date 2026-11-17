@@ -35,17 +35,10 @@ public partial class App : Application
         try
         {
             var builder = Host.CreateApplicationBuilder(e.Args);
-            var envName = builder.Environment.EnvironmentName;
-            builder.Configuration.Sources.Clear();
-            builder.Configuration
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile($"appsettings.{envName}.json", optional: true, reloadOnChange: true)
-                .AddJsonFile(GlossatorPaths.GetUserSettingsPath(), optional: true, reloadOnChange: true)
-                .AddUserSecrets<App>(optional: true)
-                .AddEnvironmentVariables()
-                .AddCommandLine(e.Args);
+            ConfigureAppConfiguration(
+                builder.Configuration,
+                builder.Environment.EnvironmentName,
+                e.Args);
 
             var config = builder.Configuration;
             var themeService = new Glossator.App.Services.StudioThemeService();
@@ -339,5 +332,37 @@ public partial class App : Application
         {
             // Çıkışta sessiz kapanış sağla
         }
+    }
+
+    internal static IConfigurationBuilder ConfigureAppConfiguration(
+        IConfigurationBuilder configuration,
+        string environmentName,
+        string[] args,
+        string? basePath = null,
+        string? userSettingsPath = null,
+        Action<IConfigurationBuilder>? configureUserSecrets = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        configuration.Sources.Clear();
+        configuration
+            .SetBasePath(basePath ?? AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.example.json", optional: true, reloadOnChange: false)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{environmentName}.json", optional: true, reloadOnChange: true);
+
+        if (configureUserSecrets != null)
+        {
+            configureUserSecrets(configuration);
+        }
+        else
+        {
+            configuration.AddUserSecrets<App>(optional: true);
+        }
+
+        return configuration
+            .AddJsonFile(userSettingsPath ?? GlossatorPaths.GetUserSettingsPath(), optional: true, reloadOnChange: true)
+            .AddEnvironmentVariables()
+            .AddCommandLine(args ?? []);
     }
 }
